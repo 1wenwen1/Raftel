@@ -13,7 +13,7 @@
 从仓库任意位置执行：
 
 ```bash
-bash /root/Raftel/experiments/experiment1/script/run_wan.sh
+bash /root/Raftel/experiments_reproduction/experiment1/script/run_wan.sh
 ```
 
 运行前请确认：
@@ -27,7 +27,7 @@ bash /root/Raftel/experiments/experiment1/script/run_wan.sh
 
 ```bash
 export DAMYSUS_REMOTE_ROOT=/root/another-directory
-bash /root/Raftel/experiments/experiment1/script/run_wan.sh
+bash /root/Raftel/experiments_reproduction/experiment1/script/run_wan.sh
 ```
 
 ## 输出结构

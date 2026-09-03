@@ -23,7 +23,7 @@
 
 ```bash
 cd /root/Raftel
-./experiments/experiment2/script/run_lan.sh
+./experiments_reproduction/experiment2/script/run_lan.sh
 ```
 
 如远程项目不在 `/root/Raftel`，请先设置 `DAMYSUS_REMOTE_ROOT`。

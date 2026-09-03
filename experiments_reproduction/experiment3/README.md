@@ -17,7 +17,7 @@
 
 ```bash
 cd /root/Raftel
-./experiments/experiment3/script/run_redis_wan.sh
+./experiments_reproduction/experiment3/script/run_redis_wan.sh
 ```
 
 如远程项目不在 `/root/Raftel`，请先设置 `DAMYSUS_REMOTE_ROOT`。脚本结束或中断时会移除远程服务器上的 netem delay。
