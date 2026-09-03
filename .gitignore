@@ -13,7 +13,6 @@ stats/
 scripts/
 exe/
 deployment/
-doc/
 out/
 runRecover.py
 ip_list
