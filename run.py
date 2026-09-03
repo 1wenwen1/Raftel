@@ -83,7 +83,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # Remote SSH/SCP tree (default: same as local checkout; override if needed)
 REMOTE_PROJECT_ROOT = Path(os.environ.get("DAMYSUS_REMOTE_ROOT", str(PROJECT_ROOT)))
 
-raw_ip_list = PROJECT_ROOT / "deployment" / "priv_ip.txt"
+raw_ip_list = PROJECT_ROOT / "aliyun" / "priv_ip.txt"
 ip_list = PROJECT_ROOT / "ip_list"
 clients = PROJECT_ROOT / "clients"
 stats_dir = PROJECT_ROOT / "stats"

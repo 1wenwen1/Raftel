@@ -1,6 +1,6 @@
 # Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World
 
-This repository contains the code accompanying the paper "Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World".
+This repository contains the code accompanying the paper ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf).
 
 ## Contents
 
@@ -140,32 +140,33 @@ The exact values depend on the machine; successful process completion and non-em
 
 The deployment scripts currently assume that this repository is checked out at `/root/Raftel` on the coordinator machine. They also assume Ubuntu 20.04 ECS instances, root SSH access, a private network route from the coordinator to every instance, and the SSH private key `/root/Raftel/TShard`.
 
-Before deployment, replace every account- and network-specific value in `deployment/config.json` with values from your Ali Cloud account. In particular, configure the region, access key, image, security group, VPC, vSwitch, instance type, and key-pair name. Do not commit access keys or private keys to the repository.
+Before deployment, replace every account- and network-specific value in `aliyun/config.json` with values from your Ali Cloud account. In particular, configure the region, access key, image, security group, VPC, vSwitch, instance type, and key-pair name. Do not commit access keys or private keys to the repository.
 
 #### Launch instances
 
 Install the Aliyun SDK, then create the instances from the coordinator:
 
 ```bash
-cd /root/Raftel/deployment
+cd /root/Raftel/aliyun
 python3 create_run_instances.py
 ```
 
-The default `instance_count` in `deployment/config.json` is `7`. Instance IDs are appended to `deployment/instances.txt`; make sure it contains only the instances for the current deployment before continuing. Wait until all instances are running, then obtain their private IP addresses:
+The default `instance_count` in `aliyun/config.json` is `7`. Instance IDs are appended to `aliyun/instances.txt`; make sure it contains only the instances for the current deployment before continuing. Wait until all instances are running, then obtain their private IP addresses:
 
 ```bash
 python3 get_priv_ip.py
 ```
 
-This writes `deployment/priv_ip.txt`. Generate the replica and client address files with:
+This writes `aliyun/priv_ip.txt`. Generate the replica and client address files from the deployment directory with:
 
 ```bash
+cd /root/Raftel/deployment
 python3 gen_ip.py 35 5
 ```
 
 The first argument is the requested number of replica addresses and the second is the number of addresses assigned to each IP. `gen_ip.py` rounds the first number up to a multiple of the second, so `python3 gen_ip.py 31 5` generates 35 addresses rather than 31. It writes `/root/Raftel/config`, `/root/Raftel/servers`, `/root/Raftel/clients`, and `/root/Raftel/ip_list`.
 
-Transfer the deployment archives and initialization scripts to every address in `deployment/priv_ip.txt`:
+Transfer the deployment archives and initialization scripts to every address in `aliyun/priv_ip.txt`:
 
 ```bash
 bash cloud_deploy.sh
@@ -215,9 +216,9 @@ python3 run.py --p0 --faults 1 --totaltee 2 \
 
 Add `--redis` to reproduce the Redis-backed KV path. Remote stdout logs are copied into `out/`, and experiment statistics are collected under `stats/` and `stats.txt`.
 
-Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `deployment/instances.txt` and release those instances with:
+Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
 
 ```bash
-cd /root/Raftel/deployment
+cd /root/Raftel/aliyun
 python3 delete_instances.py
 ```
