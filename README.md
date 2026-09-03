@@ -2,6 +2,23 @@
 
 This repository contains the code accompanying the paper "Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World".
 
+## Contents
+
+- [Current status](#current-status)
+- [Description](#description)
+- [Installing](#installing)
+  - [Required versions](#required-versions)
+  - [System packages](#system-packages)
+  - [Python packages](#python-packages)
+  - [Salticidae](#salticidae)
+- [Experiments](#experiments)
+  - [Local experiments](#local-experiments)
+    - [Minimal local test](#minimal-local-test)
+  - [Ali Cloud experiments](#ali-cloud-experiments)
+    - [Launch instances](#launch-instances)
+    - [Configure the nodes](#configure-the-nodes)
+    - [Run a cloud experiment](#run-a-cloud-experiment)
+
 ## Current status
 
 The software is under ongoing development.
