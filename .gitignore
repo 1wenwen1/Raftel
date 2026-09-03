@@ -12,7 +12,13 @@ Enclave/*.o
 stats/
 scripts/
 exe/
-deployment/
+deployment/sourcefile/archive.tar.gz
+deployment/sourcefile/damysus_updated.tar.gz
+aliyun/config.json
+aliyun/instances.txt
+aliyun/priv_ip.txt
+__pycache__/
+*.py[cod]
 out/
 runRecover.py
 ip_list
@@ -36,3 +42,4 @@ expmkp.py
 .clangd
 task.json
 .vscode/settings.json
+aliyun/
