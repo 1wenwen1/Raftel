@@ -42,10 +42,10 @@ mkdir -p obj
 mkdir -p results
 
 cd ~
-# The deployment archive still uses the legacy top-level directory name.
-# Rewrite it while extracting so deployed nodes consistently use /root/Raftel.
-tar -xvzf damysus_updated.tar.gz --transform='s#^damysus_updated\(/\|$\)#Raftel\1#'
+git clone https://github.com/1wenwen1/Raftel.git
 cd Raftel
+git submodule init
+git submodule update
 (cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)
 
 

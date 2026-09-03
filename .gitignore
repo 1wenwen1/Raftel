@@ -1,3 +1,15 @@
+# OS and editor metadata
+.DS_Store
+.vscode/settings.json
+.clangd
+pyrightconfig.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# C/C++ build products
+*.o
 enclave.signed.so
 enclave.so
 enclave.token
@@ -7,39 +19,35 @@ sgxkeys
 server
 client
 openssl-1.1.1t/
-App/*.o
-Enclave/*.o
-stats/
-scripts/
+
+# Generated SGX/deployment artifacts
 exe/
 deployment/sourcefile/archive.tar.gz
 deployment/sourcefile/damysus_updated.tar.gz
-aliyun/config.json
-aliyun/instances.txt
-aliyun/priv_ip.txt
-__pycache__/
-*.py[cod]
+
+# Experiment outputs and runtime files
 out/
-runRecover.py
-ip_list
+stats/
 stats.txt
-server
-servers
 *.txt
 *.log
 *.log.*
-*.log.*.*
-*.log.*.*.*
-*.log.*.*.*.*
-*.log.*.*.*.*.*
-clients
-close.py
 clientoutput
 client_stats
 config
-pyrightconfig.json
+servers
+clients
+ip_list
+
+# Local helper and recovery files
+runRecover.py
+close.py
 expmkp.py
-.clangd
 task.json
-.vscode/settings.json
+*_backup.*
+*.bak
+*.orig
+
+# Work in progress: keep these directories local for now
+scripts/
 aliyun/
