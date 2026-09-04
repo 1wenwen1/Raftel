@@ -11,7 +11,7 @@ IP_LIST_FILE="${REPO}/ip_list"
 PER_RUN_FILE="${RESULT_DIR}/per-run.csv"
 SUMMARY_FILE="${RESULT_DIR}/summary.csv"
 
-protocol_flags=(p0 p01 p1 p5 p6)
+protocol_flags=(p0 p1 p2 p3 p4)
 protocol_names=(HybridTEE Chained-HybridTEE Achilles Hotstuff Basic-Damysus)
 repeats=3
 faults=8

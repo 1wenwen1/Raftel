@@ -1,12 +1,12 @@
 # Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World
 
-This repository contains the code accompanying the paper ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf).
+This repository contains the code accompanying the paper ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf), which was accepted to EuroSys 2027.
 
 ## Contents
 
 - [Current status](#current-status)
 - [Description](#description)
-- [Installing](#installing)
+- [Dependencies](#dependencies)
   - [Required versions](#required-versions)
   - [System packages](#system-packages)
   - [Python packages](#python-packages)
@@ -25,9 +25,17 @@ The software is under ongoing development.
 
 ## Description
 
-The main implementation is located in the `App` and `Enclave` directories. The core consensus logic is implemented in `App/Handler.cpp`, and the primary SGX functionality is implemented in `Enclave/EnclaveComb.cpp`. Our protocol uses the `BASIC_HYBRID_TEE` macro, and its implementation is guarded by `#if defined(BASIC_HYBRID_TEE)`.
+Raftel is an SGX-based, TEE-assisted Byzantine Fault Tolerance (BFT) protocol designed for partially trusted systems in which only a subset of replicas is equipped with a TEE. This implementation is built on top of the [Damysus](https://github.com/vrahli/damysus) codebase.
 
-## Installing
+The implementation is organized as follows:
+
+- `App/Handler.cpp` implements the host-side consensus logic, including message handling, protocol phases, quorum processing, and communication with the enclave.
+- `Enclave/EnclaveComb.cpp` implements the trusted operations for the basic Raftel protocol, including protocol-state transitions, proposal validation, signing, quorum-certificate validation, and vote accumulation.
+- `Enclave/EnclaveChComb.cpp` implements the trusted operations for Chained-Raftel.
+- `App/params.h` selects the protocol at compile time. Raftel and Chained-Raftel are enabled by the `BASIC_HYBRID_TEE` and `CHAINED_HYBRID_TEE` macros, respectively.
+- `run.py` generates the protocol parameters and node configuration, compiles the selected implementation, and orchestrates local or distributed experiments.
+
+## Dependencies
 
 The documented and deployment-tested environment is Ubuntu 20.04 x86-64 with Python 3.8.10. The default build uses Intel SGX simulation mode (`SGX_MODE=SIM`), so SGX-capable hardware is not required for the minimal local test. The SGX SDK and SGX SSL are still required to compile it.
 
@@ -45,7 +53,7 @@ Use the SGX SSL package and Salticidae source included in this repository; neith
 
 ### System packages
 
-Install the packages required by the minimal in-memory test:
+Install the packages required by the local test:
 
 ```bash
 sudo apt-get update
@@ -82,9 +90,7 @@ git submodule update --init --recursive
 Build and install Salticidae into its repository-local prefix:
 
 ```bash
-cmake -S salticidae -B salticidae/build -DCMAKE_INSTALL_PREFIX="$PWD/salticidae"
-cmake --build salticidae/build -j"$(nproc)"
-cmake --install salticidae/build
+(cd salticidae && cmake . -DCMAKE_INSTALL_PREFIX=. && make -j"$(nproc)" && make install)
 ```
 
 The project `Makefile` looks for its headers and libraries under `salticidae/include` and `salticidae/lib`.
@@ -98,12 +104,12 @@ The project `Makefile` looks for its headers and libraries under `salticidae/inc
 The protocol selectors implemented by `run.py` are:
 
 - `--p0`: HybridTEE (Raftel)
-- `--p01`: Chained-HybridTEE (Chained-Raftel)
-- `--p1`: Achilles
-- `--p5`: Hotstuff
-- `--p6`: Basic-Damysus
+- `--p1`: Chained-HybridTEE (Chained-Raftel)
+- `--p2`: Achilles
+- `--p3`: Hotstuff
+- `--p4`: Basic-Damysus
 
-If no protocol selector is supplied, `run.py` defaults to `--p0`. There is no `--pall`, `--p2`, or `--p3` option.
+If no protocol selector is supplied, `run.py` defaults to `--p0`.
 
 Common local options are:
 
@@ -125,13 +131,13 @@ After installing the required dependencies and loading the SGX SDK environment, 
 ```bash
 cd /root/Raftel
 source /opt/intel/sgxsdk/environment
-python3 run.py --local --p0
+python3 run.py --local --p0 --faults 1 --totaltee 2
 ```
 
 This compiles HybridTEE in SGX simulation mode and runs four local replicas, two of which are configured as TEE replicas. The first compilation can take several minutes. A successful run finishes all processes and prints throughput and latency summaries similar to:
 
 ```text
-HybridTEE_1_0_256_400_0 thr_view= 270.0195065 lat_view= 1.4813749999999999 e2e_reply_tps= 0.40032 e2e_p95= 2.473 e2e_p99= 2.473
+HybridTEE_1_2_256_400_0 thr_view= 314.6285385 lat_view= 1.27134375 e2e_reply_tps= 0.425713 e2e_p95= 2.324 e2e_p99= 2.324
 ```
 
 The exact values depend on the machine; successful process completion and non-empty throughput/latency results are the relevant smoke-test criteria.

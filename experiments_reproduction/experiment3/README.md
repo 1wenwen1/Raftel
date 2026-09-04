@@ -2,7 +2,7 @@
 
 本实验在远程服务器上设置 `50ms` netem delay，测试五种协议的 Redis-backed KV workload：
 
-- 协议：`p0`、`p01`、`p1`、`p5`、`p6`；
+- 协议：`p0`、`p1`、`p2`、`p3`、`p4`；
 - `faults=8`，请求 `totaltee=9`；
 - 100% SET，value 大小为 1 KB，keyspace 为 10,000；
 - batchsize 400，payload 256；

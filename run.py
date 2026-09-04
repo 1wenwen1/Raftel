@@ -1,26 +1,42 @@
-import subprocess
-import signal
-import paramiko
-import glob
-import shutil
-from pathlib import Path
-from subprocess import Popen, PIPE
-import os
-from paramiko import SSHClient, AutoAddPolicy
+"""Build, launch, and summarize Raftel experiments.
+
+The script supports local and SSH-based runs, with optional replica fault
+injection and Redis-backed application state. Its high-level workflow is to
+resolve protocol topology, generate configuration, build binaries, run the
+processes, and aggregate their throughput and latency statistics.
+
+Several paths and defaults are shared with the C++ code, so they intentionally
+remain module-level constants below.
+"""
+
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from scp import SCPClient
+import glob
+import math
+import multiprocessing
+import os
+from pathlib import Path
+import shlex
+import shutil
+import signal
+import statistics
+import subprocess
+from subprocess import PIPE, Popen
 import threading
 import time
-import math
 from threading import Lock
-import argparse
-import multiprocessing
-import shlex
-import statistics
 from typing import Optional
 
+from paramiko import AutoAddPolicy, SSHClient
+from scp import SCPClient
 
-# Protocol metadata: quorum factor (e.g. 3f+1 vs 2f+1) and git branch for makeInstance checkout.
+
+# ---------------------------------------------------------------------------
+# Protocol topology
+# ---------------------------------------------------------------------------
+
+# Each value is (replica-count factor, source branch). A factor of 3 means
+# 3f+1 replicas; a factor of 2 means 2f+1 replicas.
 _PROTOCOL_CHECKOUT = {
     "HybridTEE": (3, "main"),
     "Chained-HybridTEE": (3, "main"),
@@ -31,18 +47,21 @@ _PROTOCOL_CHECKOUT = {
 
 
 def protocol_factor(protocol: str) -> int:
+    """Return the coefficient in the protocol's ``factor * faults + 1`` size."""
     if protocol not in _PROTOCOL_CHECKOUT:
         raise ValueError(f"Unknown protocol: {protocol!r}")
     return _PROTOCOL_CHECKOUT[protocol][0]
 
 
 def protocol_git_branch(protocol: str) -> str:
+    """Return the source branch associated with ``protocol``."""
     if protocol not in _PROTOCOL_CHECKOUT:
         raise ValueError(f"Unknown protocol: {protocol!r}")
     return _PROTOCOL_CHECKOUT[protocol][1]
 
 
 def num_replicas(factor: int, faults: int) -> int:
+    """Calculate the replica population for a fault threshold."""
     return factor * faults + 1
 
 
@@ -68,7 +87,11 @@ def protocol_totaltee(protocol: str, faults: int, totalnodes: int, requested: in
     raise ValueError(f"Unknown protocol: {protocol!r}")
 
 
-# --- run.py CLI flags vs experiments.py (for comparable experiments) ---
+# ---------------------------------------------------------------------------
+# Defaults and repository layout
+# ---------------------------------------------------------------------------
+
+# run.py CLI flags vs experiments.py (for comparable experiments)
 # experiments.py uses --p1..--p8; run.py uses different numbering. Rough mapping:
 #   run --p0 HybridTEE          -> BASIC_HYBRID_TEE
 #   run --p1 Chained-Hybrid    ~ (no direct single flag; see experiments CH*)
@@ -78,7 +101,7 @@ def protocol_totaltee(protocol: str, faults: int, totalnodes: int, requested: in
 # Local defaults aligned with experiments.py: numViews=10, numClTrans=1, config isTEE:1 for all nodes.
 
 
-# --- Paths (single place to change repo layout) ---
+# Paths (single place to change repo layout)
 PROJECT_ROOT = Path(__file__).resolve().parent
 # Remote SSH/SCP tree (default: same as local checkout; override if needed)
 REMOTE_PROJECT_ROOT = Path(os.environ.get("DAMYSUS_REMOTE_ROOT", str(PROJECT_ROOT)))
@@ -94,7 +117,8 @@ exen = PROJECT_ROOT / "exe"
 client_stats_file = PROJECT_ROOT / "client_stats"
 
 
-## Parameters
+# Experiment defaults. CLI arguments override the values exposed by main();
+# the remaining values are shared by helper functions below.
 sgxmode     = "SIM"
 #sgxmode      = "HW"
 srcsgx       = "source /opt/intel/sgxsdk/environment" # this is where the sdk is supposed to be installed
@@ -122,7 +146,7 @@ kv_del_ratio = 10
 kv_keyspace = 1000
 kv_value_len = 16
 
-#protocol settings
+# Build settings
 
 # fault       = 1
 # factor      = 3
@@ -135,7 +159,7 @@ no_stash = True
 SSH_USERNAME = 'root'
 SSH_KEY_PATH = './TShard'
 
-#deploy setting
+# Deployment settings
 numInstance   = 15 #number of instances run in a Machine
 allLocalPorts = []    # list of all port numbers used in local experiments
 ipsOfNodes    = {}    # dictionnary mapping node ids to IPs (local override)
@@ -145,14 +169,18 @@ startRedisPort = 6379
 allLocalRedisPorts = []
 
 
-# read IP list
+# ---------------------------------------------------------------------------
+# Configuration parsing and remote file transfer
+# ---------------------------------------------------------------------------
+
 def read_ip_list(filename):
+    """Read non-empty host addresses from ``filename`` in file order."""
     with open(filename, 'r') as file:
         ip_list = [line.strip() for line in file.readlines() if line.strip()]
     return ip_list
 
-# read servers
 def read_servers(total, filename):
+    """Read at most ``total`` replica records from a generated config file."""
     servers = []
     with open(filename, 'r') as file:
         for line in file:
@@ -191,8 +219,8 @@ def count_tee_nodes_in_config(filename) -> int:
                     break
     return tee_count
 
-# send files to node
 def scp_to_node(ip, files):
+    """Copy every local path in ``files`` to one remote project directory."""
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
     ssh.connect(ip, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
@@ -210,7 +238,6 @@ def remote_stats_dir() -> str:
     return str(REMOTE_PROJECT_ROOT / "stats")
 
 
-# execute sgxserver
 def ssh_exec_server_non_blocking(
     id,
     host,
@@ -231,6 +258,7 @@ def ssh_exec_server_non_blocking(
     clear_remote_stats: bool = True,
     redis_enabled: bool = False,
 ):
+    """Start one remote replica and monitor it in a background thread."""
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
     ssh.connect(host, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
@@ -269,6 +297,7 @@ def ssh_exec_servers_non_blocking(
     opdist,
     max_workers=6,
 ):
+    """Start remote replicas and wait until the expected set completes."""
     completion_set = set()
     lock = Lock()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -312,8 +341,8 @@ def ssh_exec_servers_non_blocking(
         print(f'completion_set {len(completion_set)}')
         time.sleep(5)
 
-# SSH execute sgxclient
 def ssh_exec_client(id, host, port1, port2, extra_params, totaltee):
+    """Issue the legacy remote-client command on one host."""
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
     ssh.connect(host, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
@@ -321,8 +350,8 @@ def ssh_exec_client(id, host, port1, port2, extra_params, totaltee):
     ssh.exec_command(cmd)
     ssh.close()
 
-# acquire stats from node
 def scp_from_node(ip):
+    """Fetch statistics using the legacy fixed remote paths."""
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
     ssh.connect(ip, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
@@ -334,8 +363,8 @@ def scp_from_node(ip):
         scp.get('/remote/damysus/stats/*', local_path='damysus/stats/')  # 修改为实际的远程路径和本地路径
     ssh.close()
 
-# send files to nodes
 def scp_files_to_nodes(ip_list, files, max_workers=6):
+    """Copy the same files to all hosts concurrently."""
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(scp_to_node, ip, files) for ip in ip_list]
         for future in futures:
@@ -344,15 +373,15 @@ def scp_files_to_nodes(ip_list, files, max_workers=6):
 
 
 
-#execute clients
 def ssh_exec_client_on_id0(servers, extra_params, totaltee):
+    """Start the legacy remote client on the host assigned replica zero."""
     id0_server = next((server for server in servers if server[0] == 0), None)
     if id0_server:
         time.sleep(5 + math.log(len(servers), 2))
         ssh_exec_client(id0_server[0], id0_server[1], id0_server[2], id0_server[3], extra_params, totaltee)
 
-# acquire stats from nodes
 def scp_files_from_nodes(ip_list):
+    """Fetch legacy statistics from all hosts concurrently."""
     threads = []
     for ip in ip_list:
         thread = threading.Thread(target=scp_from_node, args=(ip,))
@@ -377,6 +406,7 @@ def start_all_sgxservers(
     clear_remote_stats: bool = True,
     redis_enabled: bool = False,
 ):
+    """Dispatch every remote replica and return shared completion state."""
     completion_set = set()
     lock = threading.Lock()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -490,6 +520,7 @@ def ssh_start_redis_on_node(host: str, replica_id: int):
 
 
 def start_remote_redis_for_servers(servers, max_workers=6):
+    """Start one Redis instance for every configured remote replica."""
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(ssh_start_redis_on_node, host, rid)
@@ -514,6 +545,7 @@ def local_exec_client(
     kv_keys,
     kv_vlen,
 ):
+    """Start a local client for a cloud run and redirect it to a per-run log."""
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / f"client-cloud-rep{rep}-id{client_id}.log"
     log_fp = open(log_path, "w")
@@ -545,6 +577,7 @@ def local_exec_client(
     return proc
 
 def cp_client_stats():
+    """Append current client statistics to the long-lived client_stats file."""
     with open(client_stats_file, 'a') as f:
         f.write(f'numviews: {numViews}, numCTrans: {numCTran}, sleepttime: {sleepTime}\n')
     client_files = sorted(glob.glob(str(stats_dir / "client*")))
@@ -564,6 +597,7 @@ def cp_client_stats():
 
 # stop local sgxclient
 def stop_local_sgxclient():
+    """Persist client stats, then stop all local SGX client processes."""
     cp_client_stats()
 
     cmd = "pkill -f sgxclient"
@@ -575,6 +609,7 @@ def stop_local_sgxclient():
     print(f"Stop sgxclient error:\n{error}")
 
 def rm_local_stats():
+    """Remove local stats contents while preserving the directory."""
     cmd = f"rm -rf {stats_dir}/*"
     process = Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
@@ -582,12 +617,14 @@ def rm_local_stats():
     error = stderr.decode()
 
 def stop_remote_server():
+    """Run the repository's cluster-wide remote shutdown helper."""
     cmd = f"python3 {close_py}"
     subprocess.run(cmd, shell=True, check=True)
 
 
 # Block and wait for all sgxserver instances to end
 def wait_for_all_sgxservers_to_finish(completion_set, lock, total_servers):
+    """Wait for remote replicas, stopping the cluster after the timeout."""
     l = 0
     start_time = time.time()  # Start the timer
     while len(completion_set) < total_servers:
@@ -608,6 +645,7 @@ def wait_for_all_sgxservers_to_finish(completion_set, lock, total_servers):
 
 
 def clear_local_stats():
+    """Recreate an empty local statistics directory."""
     if stats_dir.exists() and stats_dir.is_dir():
         shutil.rmtree(stats_dir)
     stats_dir.mkdir(parents=True, exist_ok=True)
@@ -760,8 +798,12 @@ def kill_local_process_tree(proc: subprocess.Popen):
     except Exception:
         proc.kill()
 
-# SCP remote stats tree (under REMOTE_PROJECT_ROOT/stats/) into local_path (typically PROJECT_ROOT).
+# ---------------------------------------------------------------------------
+# Statistics collection and aggregation
+# ---------------------------------------------------------------------------
+
 def scp_stats_from_node(ip, local_path, remote_path):
+    """Recursively copy one host's statistics tree to ``local_path``."""
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
     ssh.connect(ip, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
@@ -775,6 +817,7 @@ def scp_stats_from_node(ip, local_path, remote_path):
 
 # Multi-threaded SCP stats content to local
 def scp_stats_from_nodes(ip_list, local_path, remote_path, max_workers=6):
+    """Collect remote statistics from all hosts concurrently."""
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(scp_stats_from_node, ip, local_path, remote_path) for ip in ip_list]
         for future in as_completed(futures):
@@ -891,6 +934,7 @@ def scp_out_logs_from_nodes(ip_list, local_out_path, max_workers=6):
             future.result()
 
 def find_first_number(directory):
+    """Return the first finite number found in an ``rtt-*`` file."""
     rtt_files = glob.glob(os.path.join(directory, 'rtt-*'))
 
     for file_path in rtt_files:
@@ -908,6 +952,7 @@ def find_first_number(directory):
     return None
 
 def calculate_mean_of_values(directory, *, silent=False):
+    """Average the first two values across all ``vals*`` files."""
     vals_files = glob.glob(os.path.join(directory, 'vals*'))
     total_count = 0
     sum_first = 0.0
@@ -1309,9 +1354,12 @@ def plot_live_throughput(
     print("live curve written:", out_png, out_csv)
 
 
-# make config
-    # n: Total number of servers
+# ---------------------------------------------------------------------------
+# Configuration generation and compilation
+# ---------------------------------------------------------------------------
+
 def mkConfig(n, totaltee):
+    """Generate remote replica/client configs for ``n`` total replicas."""
 
     def generate_servers(ip_list, n, numInstance):
         server_lines = []
@@ -1417,6 +1465,7 @@ def genLocalConf(n, filename, totaltee, *, all_is_tee_in_config=False):
 
 #make instance
 def makeInstance(protocol, debug, batchsize, payload, faults, totaltee, pct):
+    """Select protocol parameters and build or reuse its executable artifacts."""
 
     # MAX_NUM_TEE_SIGNATURES depends on totaltee, so binaries compiled for
     # different TEE populations must not share the same cache directory.
@@ -1488,6 +1537,7 @@ def makeInstance(protocol, debug, batchsize, payload, faults, totaltee, pct):
 
 # make params
 def mkParams(protocol,debug,constFactor,numFaults,totaltee,numTrans,payloadSize,pct):
+    """Write the compile-time constants consumed by the C++ build."""
     f = open(params, 'w')
     f.write("#ifndef PARAMS_H\n")
     f.write("#define PARAMS_H\n")
@@ -1528,6 +1578,10 @@ def mkParams(protocol,debug,constFactor,numFaults,totaltee,numTrans,payloadSize,
 
 
 
+
+# ---------------------------------------------------------------------------
+# Experiment runners
+# ---------------------------------------------------------------------------
 
 def experiment_local(
     protocol,
@@ -2677,6 +2731,7 @@ def experiment(
 
 
 def main():
+    """Parse CLI options, prepare artifacts, and dispatch the selected run mode."""
     parser = argparse.ArgumentParser(description='Start one experiment with given parameters.')
     parser.add_argument("--p0",        action="store_true",    help="run HybridTEE")
     parser.add_argument("--p1",        action="store_true",    help="run Chained-HybridTEE")
@@ -2688,12 +2743,7 @@ def main():
     parser.add_argument('--batchsize', type=int,  default=400, help='MAX_NUM_TRANSACTIONS in params (compile-time batch capacity)')
     parser.add_argument('--payload',   type=int,  default=256, help='Payload size')
     parser.add_argument('--faults',    type=int,  default=1,   help='Number of faults')
-    parser.add_argument(
-        '--totaltee',
-        type=int,
-        default=0,
-        help='Number of TEE nodes for HybridTEE; other protocols use their protocol-defined value',
-    )
+    parser.add_argument('--totaltee',  type=int,  default=0,   help='Number of TEE nodes for HybridTEE; other protocols use their protocol-defined value')
     parser.add_argument('--pct',       type=int,  default=0,   help='counter delay')
     # Local experiment parity with experiments.py (execute/computeAvgStats)
     parser.add_argument('--views',type=int,default=10,help='numViews passed to each server (default 10, same as experiments.py)',)
@@ -2711,11 +2761,7 @@ def main():
     parser.add_argument('--kv-del-ratio', type=int, default=0, help='KV workload DEL ratio (percentage-like weight)')
     parser.add_argument('--kv-keyspace', type=int, default=1000, help='KV workload keyspace size')
     parser.add_argument('--kv-value-len', type=int, default=16, help='KV workload SET value length')
-    parser.add_argument(
-        '--redis',
-        action='store_true',
-        help='run the dedicated Redis-backed KV experiment path (default: in-memory KV, no Redis startup)',
-    )
+    parser.add_argument('--redis',action='store_true',help='run the dedicated Redis-backed KV experiment path (default: in-memory KV, no Redis startup)',)
     # Local fault injection (one replica crash during local experiment).
     parser.add_argument('--fault-local',action='store_true',help='simulate one replica crash during local run (kills a server process mid-run)',)
     parser.add_argument('--fault-node-id',type=int,default=1,help='replica index to kill in --fault-local mode (default 1)',)
@@ -2773,46 +2819,46 @@ def main():
             f.write(f"Start, numviews: {args.views}\n")
 
     if args.p0:
-        Protocol = "HybridTEE"
+        protocol = "HybridTEE"
     elif args.p1:
-        Protocol = "Chained-HybridTEE"
+        protocol = "Chained-HybridTEE"
     elif args.p2:
-        Protocol = "Achilles"
+        protocol = "Achilles"
     elif args.p3:
-        Protocol = "Hotstuff"
+        protocol = "Hotstuff"
     elif args.p4:
-        Protocol = "Basic-Damysus"
+        protocol = "Basic-Damysus"
     else:
-        Protocol = "HybridTEE"
+        protocol = "HybridTEE"
 
     # if args.pct > 0:
     #     pct = args.pct
 
-    factor = protocol_factor(Protocol)
-    totalnodes = num_replicas(factor, args.faults)
+    factor = protocol_factor(protocol)
+    total_nodes = num_replicas(factor, args.faults)
     # Resolve protocol-defined TEE populations before generating configs and
     # binaries so node roles, runtime thresholds, and compile-time capacities
     # all use the same value.  Only HybridTEE honors --totaltee.
     args.totaltee = protocol_totaltee(
-        Protocol, args.faults, totalnodes, args.totaltee
+        protocol, args.faults, total_nodes, args.totaltee
     )
-    if args.config_all_tee and Protocol != "HybridTEE":
+    if args.config_all_tee and protocol != "HybridTEE":
         parser.error("--config-all-tee is only valid for HybridTEE")
-    if args.totaltee < 0 or args.totaltee > totalnodes:
-        parser.error(f"--totaltee must be between 0 and the replica count ({totalnodes})")
-    if args.leader_id < 0 or args.leader_id >= totalnodes:
-        parser.error(f"--leader-id must be between 0 and {totalnodes - 1}")
-    build_totaltee = totalnodes if args.local and args.config_all_tee else args.totaltee
+    if args.totaltee < 0 or args.totaltee > total_nodes:
+        parser.error(f"--totaltee must be between 0 and the replica count ({total_nodes})")
+    if args.leader_id < 0 or args.leader_id >= total_nodes:
+        parser.error(f"--leader-id must be between 0 and {total_nodes - 1}")
+    build_totaltee = total_nodes if args.local and args.config_all_tee else args.totaltee
     # Local mode always regenerates `config` via genLocalConf(...), so skip mkConfig here.
     # This avoids an intermediate config written with mkConfig's instance-rounding policy.
     if not args.local:
-        mkConfig(totalnodes, args.totaltee)
-    makeInstance(Protocol, args.debug, args.batchsize, args.payload, args.faults, build_totaltee, args.pct)
+        mkConfig(total_nodes, args.totaltee)
+    makeInstance(protocol, args.debug, args.batchsize, args.payload, args.faults, build_totaltee, args.pct)
 
     if args.local:
         if getattr(args, "fault_local", False):
             experiment_fault_local(
-                Protocol,
+                protocol,
                 args.debug,
                 args.batchsize,
                 args.payload,
@@ -2840,7 +2886,7 @@ def main():
             )
         else:
             experiment_local(
-                Protocol,
+                protocol,
                 args.debug,
                 args.batchsize,
                 args.payload,
@@ -2864,7 +2910,7 @@ def main():
     else:
         if getattr(args, "fault_cloud", False):
             experiment_fault_cloud(
-                Protocol,
+                protocol,
                 args.debug,
                 args.batchsize,
                 args.payload,
@@ -2890,7 +2936,7 @@ def main():
             )
         else:
             experiment(
-                Protocol,
+                protocol,
                 args.debug,
                 args.batchsize,
                 args.payload,
@@ -2911,5 +2957,4 @@ def main():
 
 
 if __name__ == "__main__":
-    
     main()

@@ -10,7 +10,7 @@ SSH_KEY="${REPO}/TShard"
 IP_LIST_FILE="${REPO}/ip_list"
 SUMMARY_FILE="${RESULT_DIR}/summary.csv"
 
-protocol_flags=(p0 p01 p1 p5 p6)
+protocol_flags=(p0 p1 p2 p3 p4)
 protocol_names=(HybridTEE Chained-HybridTEE Achilles Hotstuff Basic-Damysus)
 fault_values=(1 2 4 8 16 32)
 total_runs=$(( ${#protocol_flags[@]} * ${#fault_values[@]} ))

@@ -40,9 +40,6 @@ clients
 ip_list
 
 # Local helper and recovery files
-runRecover.py
-close.py
-expmkp.py
 task.json
 *_backup.*
 *.bak
