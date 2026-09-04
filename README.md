@@ -53,13 +53,11 @@ Use the SGX SSL package and Salticidae source included in this repository; neith
 
 ### System packages
 
-Install the packages required by the local test:
+Install the packages required by the test:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y \
-  build-essential cmake git libssl-dev libuv1-dev pkg-config \
-  python3 python3-pip
+sudo apt-get install -y build-essential cmake git libssl-dev libuv1-dev pkg-config python3 python3-pip
 ```
 
 The Redis-backed experiment path additionally requires hiredis and Redis:
@@ -81,23 +79,42 @@ Use `--redis` when running an experiment that should use this backend. The defau
 
 ### Salticidae
 
-Salticidae is included in the repository. If the checkout was cloned with Git submodules, initialize it first:
+If you decide to install Salticidae locally, you will need Git and CMake. After cloning the repository, initialize the Salticidae Git submodule:
 
 ```bash
-git submodule update --init --recursive
+git submodule init
 ```
 
-Build and install Salticidae into its repository-local prefix:
+followed by:
 
 ```bash
-(cd salticidae && cmake . -DCMAKE_INSTALL_PREFIX=. && make -j"$(nproc)" && make install)
+git submodule update
 ```
 
-The project `Makefile` looks for its headers and libraries under `salticidae/include` and `salticidae/lib`.
+Salticidae has the following dependencies:
+
+- CMake >= 3.9
+- C++14
+- libuv >= 1.10.0
+- OpenSSL >= 1.1.0
+
+Install these dependencies with:
+
+```bash
+sudo apt install cmake libuv1-dev libssl-dev
+```
+
+Then, to install Salticidae, run:
+
+```bash
+(cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)
+```
 
 ## Experiments
 
-`run.py` compiles the selected protocol, generates the local configuration, starts the replicas and client, and prints the aggregated throughput and latency. Run it from the repository root. A run modifies `App/params.h` and creates or updates `config`, `exe/`, `out/`, `stats/`, and `stats.txt`.
+> **Note:** If you are using a server on which all dependencies and the SGX environment have already been configured, start from this section.
+
+`run.py` compiles the selected protocol, generates the local configuration, starts the replicas and client, and prints the aggregated throughput and latency. Run it from the repository root.
 
 ### Local experiments
 
@@ -126,15 +143,13 @@ Run `python3 run.py --help` for fault-injection, leader-selection, workload-mix,
 
 #### Minimal local test
 
-After installing the required dependencies and loading the SGX SDK environment, run:
-
 ```bash
 cd /root/Raftel
 source /opt/intel/sgxsdk/environment
 python3 run.py --local --p0 --faults 1 --totaltee 2
 ```
 
-This compiles HybridTEE in SGX simulation mode and runs four local replicas, two of which are configured as TEE replicas. The first compilation can take several minutes. A successful run finishes all processes and prints throughput and latency summaries similar to:
+This compiles HybridTEE in SGX simulation mode and runs four local replicas, two of which are configured as TEE replicas. The experiment typically takes about two minutes. A successful run finishes all processes and prints throughput and latency summaries similar to:
 
 ```text
 HybridTEE_1_2_256_400_0 thr_view= 314.6285385 lat_view= 1.27134375 e2e_reply_tps= 0.425713 e2e_p95= 2.324 e2e_p99= 2.324

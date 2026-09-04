@@ -1,7 +1,7 @@
 #ifndef PARAMS_H
 #define PARAMS_H
 
-#define BASIC_HYBRID_TEE
+#define BASIC_HOTSTUFF
 #define MAX_NUM_NODES 4
 #define MAX_NUM_SIGNATURES 3
 #define MAX_NUM_TEE_SIGNATURES 2

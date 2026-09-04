@@ -109,12 +109,17 @@ REMOTE_PROJECT_ROOT = Path(os.environ.get("DAMYSUS_REMOTE_ROOT", str(PROJECT_ROO
 raw_ip_list = PROJECT_ROOT / "aliyun" / "priv_ip.txt"
 ip_list = PROJECT_ROOT / "ip_list"
 clients = PROJECT_ROOT / "clients"
-stats_dir = PROJECT_ROOT / "stats"
-out_dir = PROJECT_ROOT / "out"
-stats_txt = PROJECT_ROOT / "stats.txt"
 close_py = PROJECT_ROOT / "close.py"
-exen = PROJECT_ROOT / "exe"
-client_stats_file = PROJECT_ROOT / "client_stats"
+
+# These output paths are initialized to their historical locations so importing
+# this module remains backwards-compatible. main() redirects all of them to the
+# selected experiment directory before generating files or launching processes.
+RUN_OUTPUT_ROOT = PROJECT_ROOT
+stats_dir = RUN_OUTPUT_ROOT / "stats"
+out_dir = RUN_OUTPUT_ROOT / "out"
+stats_txt = RUN_OUTPUT_ROOT / "stats.txt"
+exen = RUN_OUTPUT_ROOT / "exe"
+client_stats_file = RUN_OUTPUT_ROOT / "client_stats"
 
 
 # Experiment defaults. CLI arguments override the values exposed by main();
@@ -125,7 +130,7 @@ srcsgx       = "source /opt/intel/sgxsdk/environment" # this is where the sdk is
 statsdir     = "stats"        # stats directory (don't change, hard coded in C++)
 params       = "App/params.h" # (don't change, hard coded in C++)
 config       = "App/config.h" # (don't change, hard coded in C++)
-addresses    = "config"       # (don't change, hard coded in C++)
+addresses    = RUN_OUTPUT_ROOT / "config"  # basename is hard coded in C++
 useMultiCores = True
 numMakeCores  = multiprocessing.cpu_count()  # number of cores to use to make
 repeats      = 100 #10 #50 #5 #100 #2     # number of times to repeat each experiment
@@ -167,6 +172,52 @@ startRport    = 8760
 startCport    = 9760
 startRedisPort = 6379
 allLocalRedisPorts = []
+
+
+def configure_output_paths(local: bool, experiment_number: Optional[int]) -> None:
+    """Route generated artifacts to the directory for the selected run.
+
+    The C++ binaries still read ``config`` and write ``stats/`` relative to
+    their working directory. Local processes therefore run with
+    ``RUN_OUTPUT_ROOT`` as their cwd. Remote processes keep their existing
+    remote layout; only locally generated and collected files are redirected.
+    """
+    global RUN_OUTPUT_ROOT, addresses, statsdir, stats_dir, out_dir, stats_txt, exen
+    global client_stats_file
+
+    if local:
+        RUN_OUTPUT_ROOT = PROJECT_ROOT / "local_experiment"
+    else:
+        if experiment_number is None:
+            raise ValueError("a remote run requires an experiment number")
+        RUN_OUTPUT_ROOT = (
+            PROJECT_ROOT
+            / "experiments_reproduction"
+            / f"experiment{experiment_number}"
+        )
+
+    addresses = RUN_OUTPUT_ROOT / "config"
+    stats_dir = RUN_OUTPUT_ROOT / "stats"
+    statsdir = str(stats_dir)
+    out_dir = RUN_OUTPUT_ROOT / "out"
+    stats_txt = RUN_OUTPUT_ROOT / "stats.txt"
+    exen = RUN_OUTPUT_ROOT / "exe"
+    client_stats_file = RUN_OUTPUT_ROOT / "client_stats"
+
+    RUN_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    exen.mkdir(parents=True, exist_ok=True)
+
+
+def prepare_local_runtime_files(debug: bool) -> None:
+    """Copy SGX runtime files needed when local binaries use the new cwd."""
+    if debug:
+        return
+    for filename in ("enclave.signed.so", "enclave.token"):
+        source = PROJECT_ROOT / filename
+        if source.is_file():
+            shutil.copy2(source, RUN_OUTPUT_ROOT / filename)
 
 
 # ---------------------------------------------------------------------------
@@ -467,11 +518,11 @@ def ssh_kill_sgxserver_on_host(host: str, replica_id=None) -> None:
 
 
 def poll_remote_stats_forever(ips, stop_event: threading.Event, interval_sec: float):
-    """Periodically mirror REMOTE_PROJECT_ROOT/stats from every node into local PROJECT_ROOT/stats."""
+    """Periodically mirror every node's remote stats into this run's output tree."""
     remote_stats = remote_stats_dir() + os.sep
     while not stop_event.wait(interval_sec):
         try:
-            scp_stats_from_nodes(ips, str(PROJECT_ROOT) + os.sep, remote_stats)
+            scp_stats_from_nodes(ips, str(RUN_OUTPUT_ROOT) + os.sep, remote_stats)
         except Exception as e:
             print("[fault-cloud] stats poll failed:", e)
 
@@ -549,9 +600,9 @@ def local_exec_client(
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / f"client-cloud-rep{rep}-id{client_id}.log"
     log_fp = open(log_path, "w")
-    client_bin = "./client" if debug else "./sgxclient"
+    client_bin = PROJECT_ROOT / ("client" if debug else "sgxclient")
     cmd = [
-        client_bin,
+        str(client_bin),
         str(client_id),
         str(faults),
         str(factor),
@@ -567,7 +618,7 @@ def local_exec_client(
     ]
     proc = Popen(
         cmd,
-        cwd=str(PROJECT_ROOT),
+        cwd=str(RUN_OUTPUT_ROOT),
         stdout=log_fp,
         stderr=log_fp,
         preexec_fn=os.setsid,
@@ -687,7 +738,7 @@ def start_local_redis_instances(num_replicas: int):
         subprocess.run(f"fuser -k {ports_arg}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.2)
 
-    redis_root = PROJECT_ROOT / "stats" / "redis"
+    redis_root = stats_dir / "redis"
     redis_root.mkdir(parents=True, exist_ok=True)
     for rid in range(num_replicas):
         port = startRedisPort + rid
@@ -739,7 +790,7 @@ def start_local_server_process(
         str(leader_id),
         "redis" if redis_enabled else "memory",
     ]
-    return Popen(cmd, cwd=str(PROJECT_ROOT), preexec_fn=os.setsid)
+    return Popen(cmd, cwd=str(RUN_OUTPUT_ROOT), preexec_fn=os.setsid)
 
 
 def start_local_client_process(
@@ -777,7 +828,7 @@ def start_local_client_process(
     ]
     proc = Popen(
         cmd,
-        cwd=str(PROJECT_ROOT),
+        cwd=str(RUN_OUTPUT_ROOT),
         stdout=log_fp,
         stderr=log_fp,
         preexec_fn=os.setsid,
@@ -1620,8 +1671,8 @@ def experiment_local(
     total = num_replicas(factor, faults)
     pro_dir = f"{protocol}_{faults}_{totaltee}_{payload}_{batchsize}_{pct}"
 
-    server_bin = "./server" if debug else "./sgxserver"
-    client_bin = "./client" if debug else "./sgxclient"
+    server_bin = str(PROJECT_ROOT / ("server" if debug else "sgxserver"))
+    client_bin = str(PROJECT_ROOT / ("client" if debug else "sgxclient"))
     stats_directory = str(stats_dir) + os.sep
 
     throughput_views = []
@@ -1809,8 +1860,8 @@ def experiment_local(
         ) = compute_stats_like_experiments(stats_directory)
 
         # Live curve: aggregate stats/live-* written during this repeat.
-        live_out_png = str(PROJECT_ROOT / "stats" / f"live-curve-{pro_dir}-rep{rep}.png")
-        live_out_csv = str(PROJECT_ROOT / "stats" / f"live-curve-{pro_dir}-rep{rep}.csv")
+        live_out_png = str(stats_dir / f"live-curve-{pro_dir}-rep{rep}.png")
+        live_out_csv = str(stats_dir / f"live-curve-{pro_dir}-rep{rep}.csv")
         plot_live_throughput(stats_directory, live_out_png, live_out_csv)
 
         # Fault experiments may end before recordStats() writes vals/done; in that case,
@@ -1969,8 +2020,8 @@ def experiment_fault_local(
     total = num_replicas(factor, faults)
     pro_dir = f"{protocol}_{faults}_{totaltee}_{payload}_{batchsize}_{pct}"
 
-    server_bin = "./server" if debug else "./sgxserver"
-    client_bin = "./client" if debug else "./sgxclient"
+    server_bin = str(PROJECT_ROOT / ("server" if debug else "sgxserver"))
+    client_bin = str(PROJECT_ROOT / ("client" if debug else "sgxclient"))
     stats_directory = str(stats_dir) + os.sep
 
     throughput_views = []
@@ -2174,8 +2225,8 @@ def experiment_fault_local(
             crypto_num_verif,
         ) = compute_stats_like_experiments(stats_directory)
 
-        live_out_png = str(PROJECT_ROOT / "stats" / f"live-curve-{pro_dir}-rep{rep}-fault.png")
-        live_out_csv = str(PROJECT_ROOT / "stats" / f"live-curve-{pro_dir}-rep{rep}-fault.csv")
+        live_out_png = str(stats_dir / f"live-curve-{pro_dir}-rep{rep}-fault.png")
+        live_out_csv = str(stats_dir / f"live-curve-{pro_dir}-rep{rep}-fault.csv")
         plot_live_throughput(
             stats_directory,
             live_out_png,
@@ -2372,13 +2423,13 @@ def experiment_fault_cloud(
 
     if debug:
         files_to_copy = [
-            str(PROJECT_ROOT / "config"),
+            str(addresses),
             str(PROJECT_ROOT / "server"),
             str(PROJECT_ROOT / "client"),
         ]
     else:
         files_to_copy = [
-            str(PROJECT_ROOT / "config"),
+            str(addresses),
             str(PROJECT_ROOT / "sgxserver"),
             str(PROJECT_ROOT / "sgxclient"),
             str(PROJECT_ROOT / "enclave.so"),
@@ -2481,7 +2532,7 @@ def experiment_fault_cloud(
     wait_local_client_procs(client_procs, float(timeoutTime))
     close_client_log_handles(client_procs)
 
-    scp_stats_from_nodes(ips, str(PROJECT_ROOT) + os.sep, remote_stats_dir() + os.sep)
+    scp_stats_from_nodes(ips, str(RUN_OUTPUT_ROOT) + os.sep, remote_stats_dir() + os.sep)
     clear_local_out_logs()
     scp_out_logs_from_nodes(ips, str(out_dir))
 
@@ -2598,13 +2649,13 @@ def experiment(
     #scp files to the servers
     if debug:
         files_to_copy = [
-            str(PROJECT_ROOT / "config"),
+            str(addresses),
             str(PROJECT_ROOT / "server"),
             str(PROJECT_ROOT / "client"),
         ]
     else:
         files_to_copy = [
-            str(PROJECT_ROOT / "config"),
+            str(addresses),
             str(PROJECT_ROOT / "sgxserver"),
             str(PROJECT_ROOT / "sgxclient"),
             str(PROJECT_ROOT / "enclave.so"),
@@ -2665,7 +2716,7 @@ def experiment(
     close_client_log_handles(client_procs)
 
     # get data from nodes
-    scp_stats_from_nodes(ips, str(PROJECT_ROOT) + os.sep, remote_stats_dir() + os.sep)
+    scp_stats_from_nodes(ips, str(RUN_OUTPUT_ROOT) + os.sep, remote_stats_dir() + os.sep)
     clear_local_out_logs()
     scp_out_logs_from_nodes(ips, str(out_dir))
 
@@ -2740,6 +2791,14 @@ def main():
     parser.add_argument("--p4",        action="store_true",    help="run basic Damysus")
     parser.add_argument("--debug",     action="store_true",    help="non_TEE")
     parser.add_argument("--local",     action="store_true",    help="run locally")
+    parser.add_argument(
+        "--experiment-number",
+        type=int,
+        default=None,
+        metavar="N",
+        help="remote experiment number; stores local artifacts under "
+        "experiments_reproduction/experimentN (required without --local)",
+    )
     parser.add_argument('--batchsize', type=int,  default=400, help='MAX_NUM_TRANSACTIONS in params (compile-time batch capacity)')
     parser.add_argument('--payload',   type=int,  default=256, help='Payload size')
     parser.add_argument('--faults',    type=int,  default=1,   help='Number of faults')
@@ -2806,6 +2865,12 @@ def main():
         parser.error("--fault-cloud is only for remote runs (do not pass --local)")
     if getattr(args, "fault_cloud", False) and getattr(args, "fault_local", False):
         parser.error("use only one of --fault-cloud and --fault-local")
+    if not args.local and args.experiment_number is None:
+        parser.error("non-local runs require --experiment-number N")
+    if args.experiment_number is not None and args.experiment_number < 1:
+        parser.error("--experiment-number must be at least 1")
+
+    configure_output_paths(args.local, args.experiment_number)
 
     global kv_set_ratio, kv_get_ratio, kv_del_ratio, kv_keyspace, kv_value_len
     kv_set_ratio = max(0, args.kv_set_ratio)
@@ -2854,6 +2919,8 @@ def main():
     if not args.local:
         mkConfig(total_nodes, args.totaltee)
     makeInstance(protocol, args.debug, args.batchsize, args.payload, args.faults, build_totaltee, args.pct)
+    if args.local:
+        prepare_local_runtime_files(args.debug)
 
     if args.local:
         if getattr(args, "fault_local", False):
