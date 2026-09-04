@@ -48,8 +48,7 @@ task.json
 # Work in progress
 scripts/
 
-# Ali Cloud credentials, runtime state, and SSH keys stay local.
-TShard
+# Ali Cloud credentials and runtime state stay local.
 aliyun/config*.json
 !aliyun/config.example.json
 aliyun/*.txt
