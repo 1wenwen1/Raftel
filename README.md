@@ -161,46 +161,39 @@ The exact values depend on the machine; successful process completion and non-em
 
 The deployment scripts currently assume that this repository is checked out at `/root/Raftel` on the coordinator machine. They also assume Ubuntu 20.04 ECS instances, root SSH access, a private network route from the coordinator to every instance, and the SSH private key `/root/Raftel/TShard`.
 
-Before deployment, replace every account- and network-specific value in `aliyun/config.json` with values from your Ali Cloud account. In particular, configure the region, access key, image, security group, VPC, vSwitch, instance type, and key-pair name. Do not commit access keys or private keys to the repository.
+Before deployment, replace every account- and network-specific value in `aliyun/config.json` with values from your Ali Cloud account. In particular, configure the region, access key, image, security group, VPC, vSwitch, instance type, and key-pair name. Do not commit access keys or private keys to the repository. Ali Cloud API scripts are in `aliyun/`; cluster deployment scripts are in `deployment/`, and the archive and initialization script copied to each node are in `deployment/sourcefile/`.
 
 #### Launch instances
 
 Install the Aliyun SDK, then create the instances from the coordinator:
 
 ```bash
-cd /root/Raftel/aliyun
-python3 create_run_instances.py
+cd /root/Raftel
+python3 aliyun/create_run_instances.py
 ```
 
-The default `instance_count` in `aliyun/config.json` is `7`. Instance IDs are appended to `aliyun/instances.txt`; make sure it contains only the instances for the current deployment before continuing. Wait until all instances are running, then obtain their private IP addresses:
+The default `instance_count` in `aliyun/config.json` is `7`. Instance IDs are appended to `aliyun/instances.txt`. Wait for every instance to enter the `Running` state, acquire a private IP address, and accept SSH connections:
 
 ```bash
-python3 get_priv_ip.py
+python3 aliyun/wait_instances_ready.py
 ```
 
-This writes `aliyun/priv_ip.txt`. Generate the replica and client address files from the deployment directory with:
-
-```bash
-cd /root/Raftel/deployment
-python3 gen_ip.py 35 5
-```
-
-The first argument is the requested number of replica addresses and the second is the number of addresses assigned to each IP. `gen_ip.py` rounds the first number up to a multiple of the second, so `python3 gen_ip.py 31 5` generates 35 addresses rather than 31. It writes `/root/Raftel/config`, `/root/Raftel/servers`, `/root/Raftel/clients`, and `/root/Raftel/ip_list`.
+The polling script reads `aliyun/instances.txt` and writes `aliyun/priv_ip.txt` only after all listed instances pass every check. By default it polls every 10 seconds for up to 15 minutes. Use `--interval`, `--timeout`, `--key`, or `--user` to override those settings. `run.py` later reads `aliyun/priv_ip.txt` and, for every cloud run, calls `mkConfig(...)` to generate the replica configuration and the repository-root `config`, `clients`, and `ip_list` files from the selected protocol and fault parameters.
 
 Transfer the deployment archives and initialization scripts to every address in `aliyun/priv_ip.txt`:
 
 ```bash
-bash cloud_deploy.sh
+bash deployment/cloud_deploy.sh
 ```
 
-At present, `cloud_deploy.sh` performs the file transfer only; its instance-creation and address-generation commands are commented out. Therefore, the preceding three steps must be run explicitly.
+`deployment/cloud_deploy.sh` performs file transfer only. It invokes `deployment/transfer.py`, which copies `deployment/sourcefile/archive.tar.gz` and `deployment/sourcefile/init.sh` to `/root/` on each instance. Therefore, instance creation and readiness polling must be run explicitly first.
 
 #### Configure the nodes
 
 Start one background tmux setup session per instance:
 
 ```bash
-bash cloud_config.sh
+bash deployment/cloud_config.sh
 ```
 
 Each session connects to a node and runs `/root/init.sh`. Inspect a particular setup session with:
@@ -213,15 +206,15 @@ tmux attach -t setup1
 Detach without stopping the remote installation by pressing `Ctrl-b`, then `d`. Do not type `exit` merely to detach: it terminates the SSH shell in that session. When all installations have completed, close the setup sessions with:
 
 ```bash
-bash close.sh
+bash deployment/close.sh
 ```
 
-Warning: `close.sh` kills every tmux session on the coordinator, not only sessions named `setup*`.
+Warning: `deployment/close.sh` kills every tmux session on the coordinator, not only sessions named `setup*`.
 
 For Redis-backed reproduction, install hiredis on all configured nodes after the SGX setup:
 
 ```bash
-bash install_hiredis_on_ips.sh
+bash deployment/install_hiredis_on_ips.sh
 ```
 
 #### Run a cloud experiment
@@ -231,15 +224,19 @@ Run `run.py` from `/root/Raftel` without `--local`. It reads the generated node 
 ```bash
 cd /root/Raftel
 source /opt/intel/sgxsdk/environment
-python3 run.py --p0 --faults 1 --totaltee 2 \
+python3 run.py --p0 --faults 1 --totaltee 2 --experiment-number 1 \
   --payload 256 --batchsize 400 --views 10 --cl-trans 1
 ```
 
-Add `--redis` to reproduce the Redis-backed KV path. Remote stdout logs are copied into `out/`, and experiment statistics are collected under `stats/` and `stats.txt`.
+Add `--redis` to reproduce the Redis-backed KV path. Experiment statistics are collected under `stats/` and `stats.txt`. To copy remote `out<N>` stdout logs into per-node directories under local `out/`, run:
+
+```bash
+python3 deployment/fetch_remote_logs.py
+```
 
 Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
 
 ```bash
-cd /root/Raftel/aliyun
-python3 delete_instances.py
+cd /root/Raftel
+python3 aliyun/delete_instances.py
 ```

@@ -23,7 +23,6 @@ openssl-1.1.1t/
 # Generated SGX/deployment artifacts
 exe/
 deployment/sourcefile/archive.tar.gz
-deployment/sourcefile/damysus_updated.tar.gz
 
 # Experiment outputs and runtime files
 out/
