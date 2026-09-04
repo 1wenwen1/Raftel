@@ -159,9 +159,9 @@ The exact values depend on the machine; successful process completion and non-em
 
 ### Ali Cloud experiments
 
-The deployment scripts currently assume that this repository is checked out at `/root/Raftel` on the coordinator machine. They also assume Ubuntu 20.04 ECS instances, root SSH access, a private network route from the coordinator to every instance, and the SSH private key `/root/Raftel/TShard`.
+Check out the repository at `/root/Raftel` on the coordinator machine. Cloud deployment uses Ubuntu 20.04 ECS instances, root SSH access, private-network connectivity from the coordinator to every instance, and the SSH private key `/root/Raftel/TShard`.
 
-Before deployment, replace every account- and network-specific value in `aliyun/config.json` with values from your Ali Cloud account. In particular, configure the region, access key, image, security group, VPC, vSwitch, instance type, and key-pair name. Do not commit access keys or private keys to the repository. Ali Cloud API scripts are in `aliyun/`; cluster deployment scripts are in `deployment/`, and the archive and initialization script copied to each node are in `deployment/sourcefile/`.
+Create the local `aliyun/config.json` from `aliyun/config.example.json`, then configure the region, access key, image, security group, VPC, vSwitch, instance type, and key-pair name for the target Ali Cloud account. `aliyun/config.json` is excluded from Git and must remain local because it contains account credentials and resource identifiers. Ali Cloud instance-management scripts are in `aliyun/`; cluster deployment scripts are in `deployment/`; and the archive and initialization script copied to each node are in `deployment/sourcefile/`.
 
 #### Launch instances
 
