@@ -45,6 +45,14 @@ task.json
 *.bak
 *.orig
 
-# Work in progress: keep these directories local for now
+# Work in progress
 scripts/
-aliyun/
+
+# Ali Cloud credentials, runtime state, and SSH keys stay local.
+TShard
+aliyun/config*.json
+!aliyun/config.example.json
+aliyun/*.txt
+aliyun/.env*
+aliyun/*.key
+aliyun/*.pem

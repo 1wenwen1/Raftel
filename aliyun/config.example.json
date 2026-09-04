@@ -1,0 +1,14 @@
+{
+  "region_id": "YOUR_REGION_ID",
+  "access_key_id": "YOUR_ACCESS_KEY_ID",
+  "access_key_secret": "YOUR_ACCESS_KEY_SECRET",
+  "instance_type": "YOUR_INSTANCE_TYPE",
+  "instance_count": 7,
+  "image_id": "YOUR_IMAGE_ID",
+  "security_group_id": "YOUR_SECURITY_GROUP_ID",
+  "instance_name_prefix": "Raftel",
+  "internet_max_bandwidth_out": "100",
+  "key_pair_name": "YOUR_KEY_PAIR_NAME",
+  "vpc_id": "YOUR_VPC_ID",
+  "vswitch_id": "YOUR_VSWITCH_ID"
+}
