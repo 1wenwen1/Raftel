@@ -188,8 +188,10 @@ def configure_output_paths(local: bool, experiment_number: Optional[int]) -> Non
     if local:
         RUN_OUTPUT_ROOT = PROJECT_ROOT / "local_experiment"
     else:
+        # A cloud run without an explicit experiment number is the minimal
+        # smoke test and writes to experiment0.
         if experiment_number is None:
-            raise ValueError("a remote run requires an experiment number")
+            experiment_number = 0
         RUN_OUTPUT_ROOT = (
             PROJECT_ROOT
             / "experiments_reproduction"
@@ -315,7 +317,9 @@ def ssh_exec_server_non_blocking(
     ssh.connect(host, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
     nodeType = "TEE" if id < totaltee else "nonTEE"
     vc_to = float(timeout if view_timeout is None else view_timeout)
-    rm_stats = "rm -rf stats/* && " if clear_remote_stats else ""
+    # The repository checkout does not necessarily contain the runtime stats
+    # directory.  Create it before the server opens stats/vals-* files.
+    rm_stats = "mkdir -p stats && rm -rf stats/* && " if clear_remote_stats else "mkdir -p stats && "
     app_backend = "redis" if redis_enabled else "memory"
     if debug:
         cmd = f"export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/intel/sgxsdk/sdk_libs && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib && cd {REMOTE_PROJECT_ROOT} && {rm_stats}./server {id} {nodeType} {totaltee} {faults} {factor} {num_views} {vc_to} {opdist} {leader_mode} {leader_id} {app_backend} > out{id}"
@@ -983,6 +987,25 @@ def scp_out_logs_from_nodes(ip_list, local_out_path, max_workers=6):
         futures = [executor.submit(scp_out_logs_from_node, ip, local_out_path) for ip in ip_list]
         for future in as_completed(futures):
             future.result()
+
+
+def collect_remote_artifacts(ips) -> None:
+    """Collect server stdout even when copying the statistics tree fails."""
+    stats_error = None
+    try:
+        scp_stats_from_nodes(
+            ips,
+            str(RUN_OUTPUT_ROOT) + os.sep,
+            remote_stats_dir() + os.sep,
+        )
+    except Exception as exc:
+        stats_error = exc
+    finally:
+        clear_local_out_logs()
+        scp_out_logs_from_nodes(ips, str(out_dir))
+
+    if stats_error is not None:
+        raise stats_error
 
 def find_first_number(directory):
     """Return the first finite number found in an ``rtt-*`` file."""
@@ -2532,9 +2555,7 @@ def experiment_fault_cloud(
     wait_local_client_procs(client_procs, float(timeoutTime))
     close_client_log_handles(client_procs)
 
-    scp_stats_from_nodes(ips, str(RUN_OUTPUT_ROOT) + os.sep, remote_stats_dir() + os.sep)
-    clear_local_out_logs()
-    scp_out_logs_from_nodes(ips, str(out_dir))
+    collect_remote_artifacts(ips)
 
     stats_directory = str(stats_dir) + os.sep
     live_out_png = str(out_dir / f"fault-cloud-live-{pro_dir}.png")
@@ -2716,9 +2737,7 @@ def experiment(
     close_client_log_handles(client_procs)
 
     # get data from nodes
-    scp_stats_from_nodes(ips, str(RUN_OUTPUT_ROOT) + os.sep, remote_stats_dir() + os.sep)
-    clear_local_out_logs()
-    scp_out_logs_from_nodes(ips, str(out_dir))
+    collect_remote_artifacts(ips)
 
     stats_directory = str(stats_dir) + os.sep
 
@@ -2797,7 +2816,7 @@ def main():
         default=None,
         metavar="N",
         help="remote experiment number; stores local artifacts under "
-        "experiments_reproduction/experimentN (required without --local)",
+        "experiments_reproduction/experimentN (default: 0)",
     )
     parser.add_argument('--batchsize', type=int,  default=400, help='MAX_NUM_TRANSACTIONS in params (compile-time batch capacity)')
     parser.add_argument('--payload',   type=int,  default=256, help='Payload size')
@@ -2865,10 +2884,8 @@ def main():
         parser.error("--fault-cloud is only for remote runs (do not pass --local)")
     if getattr(args, "fault_cloud", False) and getattr(args, "fault_local", False):
         parser.error("use only one of --fault-cloud and --fault-local")
-    if not args.local and args.experiment_number is None:
-        parser.error("non-local runs require --experiment-number N")
-    if args.experiment_number is not None and args.experiment_number < 1:
-        parser.error("--experiment-number must be at least 1")
+    if args.experiment_number is not None and args.experiment_number < 0:
+        parser.error("--experiment-number must be at least 0")
 
     configure_output_paths(args.local, args.experiment_number)
 

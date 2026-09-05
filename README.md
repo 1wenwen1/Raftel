@@ -221,11 +221,12 @@ bash deployment/install_hiredis_on_ips.sh
 
 Run `run.py` from `/root/Raftel` without `--local`. It reads the generated node files and deploys the compiled binaries to the remote nodes. For example:
 
+If `--experiment-number` is omitted, the run is treated as a minimal cloud smoke test and its generated artifacts and collected results are written under `experiments_reproduction/experiment0/`. Passing `--experiment-number N` continues to select `experiments_reproduction/experimentN/`.
+
 ```bash
 cd /root/Raftel
 source /opt/intel/sgxsdk/environment
-python3 run.py --p0 --faults 1 --totaltee 2 --experiment-number 1 \
-  --payload 256 --batchsize 400 --views 10 --cl-trans 1
+python3 run.py --p0 --faults 1 --totaltee 2
 ```
 
 Add `--redis` to reproduce the Redis-backed KV path. Experiment statistics are collected under `stats/` and `stats.txt`. To copy remote `out<N>` stdout logs into per-node directories under local `out/`, run:

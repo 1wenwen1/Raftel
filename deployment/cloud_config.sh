@@ -16,8 +16,9 @@ do
     tmux has-session -t "setup$count" 2>/dev/null && tmux kill-session -t "setup$count"
     tmux new-session -Ad -s "setup$count"
     
-    # Connect to the specified IP address in the new tmux session
-    tmux send-keys -t "setup$count" "ssh -i  /root/Raftel/TShard -o StrictHostKeyChecking=no root@$ip 'bash init.sh'" C-m
+    # Prepare SGX, reboot, wait for SSH, and then run the remaining setup.
+    tmux send-keys -t "setup$count" \
+        "bash /root/Raftel/deployment/configure_experiment_server.sh '$ip'" C-m
 
     # Add a counter
     ((count++))

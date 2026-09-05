@@ -15,6 +15,7 @@ def scp_command(ip: str) -> None:
     source_dir = PROJECT_ROOT / "deployment" / "sourcefile"
     source_file = str(source_dir / "archive.tar.gz")
     source_file1 = str(source_dir / "init.sh")
+    source_file2 = str(source_dir / "SGX_init.sh")
     destination = f"root@{ip}:/root/"
 
     # Remove stale deployment inputs and the obsolete remote address generator.
@@ -23,7 +24,7 @@ def scp_command(ip: str) -> None:
         + COMMON
         + [
             f"root@{ip}",
-            "rm -f /root/init.sh /root/archive.tar.gz "
+            "rm -f /root/init.sh /root/SGX_init.sh /root/archive.tar.gz "
             "/root/Raftel/deployment/gen_ip.py",
         ],
         check=False,
@@ -31,9 +32,11 @@ def scp_command(ip: str) -> None:
 
     command = ["scp"] + COMMON + [source_file, destination]
     command1 = ["scp"] + COMMON + [source_file1, destination]
+    command2 = ["scp"] + COMMON + [source_file2, destination]
     try:
         subprocess.run(command, check=True)
         subprocess.run(command1, check=True)
+        subprocess.run(command2, check=True)
         print(f"Successfully transferred files to {ip}")
     except subprocess.CalledProcessError as e:
         print(f"Failed to transfer file to {ip}: {e}")
