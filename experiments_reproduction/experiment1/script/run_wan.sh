@@ -14,8 +14,8 @@ SSH_KEY="${REPO}/TShard"
 IP_LIST_FILE="${REPO}/ip_list"
 STATS_FILE="${EXP_DIR}/stats.txt"
 
-protocol_flags=(p0 p1 p2 p3 p4)
-protocol_names=(HybridTEE Chained-HybridTEE Achilles Hotstuff Basic-Damysus)
+protocol_flags=(p0 p1 p2 p3 p4 p0)
+protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus Raftel-Worst)
 fault_values=(1 2 4 8 16 32)
 total_runs=$(( ${#protocol_flags[@]} * ${#fault_values[@]} ))
 
@@ -78,7 +78,13 @@ run_one() {
     local rc summary_line
     local -a protocol_args=()
 
-    if [[ "${flag}" == "p0" ]]; then
+    if [[ "${protocol}" == "Raftel-Worst" ]]; then
+        protocol_args=(
+            --totaltee "${faults}"
+            --leader-mode fixed
+            --leader-id "$((faults + 1))"
+        )
+    elif [[ "${flag}" == "p0" ]]; then
         protocol_args=(--totaltee "$((faults + 1))")
     fi
 

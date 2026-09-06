@@ -4,7 +4,7 @@ This experiment corresponds to Figure 6 in the paper. It adds a 50 ms `netem` de
 
 ## Configuration
 
-- Protocols: HybridTEE (`p0`), Chained-HybridTEE (`p1`), Achilles (`p2`), Hotstuff (`p3`), and Basic-Damysus (`p4`)
+- Protocols: Raftel (`p0`), Chained (`p1`), Achilles (`p2`), Hotstuff (`p3`), and Basic-Damysus (`p4`)
 - Fault threshold: `8`
 - Requested TEE population: `9`
 - Workload: 100% SET operations, 1 KB values, and a keyspace of 10,000 keys
@@ -16,9 +16,11 @@ This experiment corresponds to Figure 6 in the paper. It adds a 50 ms `netem` de
 - Leader: fixed replica 0
 - Backend: Redis, enabled with `--redis`
 
-Only HybridTEE accepts a configurable `--totaltee` value. The effective TEE populations are nine for HybridTEE, nine for Chained-HybridTEE, all 17 replicas for Achilles, zero for Hotstuff, and all 17 replicas for Basic-Damysus.
+Only Raftel accepts a configurable `--totaltee` value. The effective TEE populations are nine for Raftel, nine for Chained, all 17 replicas for Achilles, zero for Hotstuff, and all 17 replicas for Basic-Damysus.
 
 The remote `netem` configuration is removed when the script exits or is interrupted.
+
+Estimated running time: approximately 1.5 hours, assuming the configured nodes are available and no failed runs need to be repeated.
 
 ## Prerequisites
 

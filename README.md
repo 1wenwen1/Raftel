@@ -9,6 +9,8 @@ This repository contains the code accompanying the paper ["Breaking Fault Lines:
 - [Dependencies](#dependencies)
   - [Required versions](#required-versions)
   - [System packages](#system-packages)
+  - [SGX kernel support](#sgx-kernel-support)
+  - [Intel SGX SDK](#intel-sgx-sdk)
   - [Python packages](#python-packages)
   - [Salticidae](#salticidae)
 - [Experiments](#experiments)
@@ -71,6 +73,36 @@ redis-server --version
 
 Use `--redis` when running an experiment that should use this backend. The default local test uses the in-memory backend and does not start Redis.
 
+### SGX kernel support
+
+Hardware-mode experiments require an SGX-capable machine and the Linux in-kernel SGX driver. On Ubuntu 20.04, run the included setup check:
+
+```bash
+cd /root/Raftel
+sudo bash deployment/sourcefile/SGX_init.sh
+```
+
+If it installs the HWE kernel, reboot and run the command again. A successful setup exposes both devices:
+
+```bash
+ls /dev/sgx_enclave /dev/sgx_provision
+```
+
+The minimal local test uses SGX simulation mode and does not require SGX hardware or these device nodes.
+
+### Intel SGX SDK
+
+Extract the bundled installers and install Intel SGX SDK 2.23.100.2 under `/opt/intel/sgxsdk`:
+
+```bash
+cd /root/Raftel/deployment/sourcefile
+tar -xzf archive.tar.gz
+printf 'no\n/opt/intel\n' | sudo ./sgx_linux_x64_sdk_2.23.100.2.bin
+source /opt/intel/sgxsdk/environment
+```
+
+Run the final `source` command in each new shell before building or running an experiment.
+
 ### Python packages
 
 - `matplotlib`
@@ -121,8 +153,8 @@ Then, to install Salticidae, run:
 
 The protocol selectors implemented by `run.py` are:
 
-- `--p0`: HybridTEE (Raftel)
-- `--p1`: Chained-HybridTEE (Chained-Raftel)
+- `--p0`: Raftel
+- `--p1`: Chained
 - `--p2`: Achilles
 - `--p3`: Hotstuff
 - `--p4`: Basic-Damysus
@@ -133,7 +165,7 @@ Common local options are:
 
 - `--local`: run all replicas on the current machine.
 - `--faults N`: set the number of tolerated faults (default: `1`). The protocol determines the replica count.
-- `--totaltee N`: set the number of TEE replicas for HybridTEE (default: `0`). Protocols with a fixed TEE population ignore this option.
+- `--totaltee N`: set the number of TEE replicas for Raftel (default: `0`). Protocols with a fixed TEE population ignore this option.
 - `--payload N`: set the payload size in bytes (default: `256`).
 - `--batchsize N`: set the compile-time maximum transactions per batch (default: `400`).
 - `--views N`: set the number of views passed to each replica (default: `10`).
@@ -150,10 +182,10 @@ source /opt/intel/sgxsdk/environment
 python3 run.py --local --p0 --faults 1 --totaltee 2
 ```
 
-This compiles HybridTEE in SGX simulation mode and runs four local replicas, two of which are configured as TEE replicas. The experiment typically takes about two minutes. A successful run finishes all processes and prints throughput and latency summaries similar to:
+This compiles Raftel in SGX simulation mode and runs four local replicas, two of which are configured as TEE replicas. The experiment typically takes about two minutes. A successful run finishes all processes and prints throughput and latency summaries similar to:
 
 ```text
-HybridTEE_1_2_256_400_0 thr_view= 314.6285385 lat_view= 1.27134375 e2e_reply_tps= 0.425713 e2e_p95= 2.324 e2e_p99= 2.324
+Raftel_1_2_256_400_0 thr_view= 314.6285385 lat_view= 1.27134375 e2e_reply_tps= 0.425713 e2e_p95= 2.324 e2e_p99= 2.324
 ```
 
 The exact values depend on the machine; successful process completion and non-empty throughput/latency results are the relevant smoke-test criteria.
@@ -251,7 +283,9 @@ At the start of each experiment, its script removes the previous contents of tha
 
 **Experiment 1 — WAN scalability (Figure 3)**
 
-This experiment applies a 50 ms network delay to the remote nodes and measures the throughput and latency of the five protocols with fault thresholds of 1, 2, 4, 8, 16, and 32.
+This experiment applies a 50 ms network delay to the remote nodes and measures the throughput and latency of five protocols plus the Raftel-Worst configuration, with fault thresholds of 1, 2, 4, 8, 16, and 32. Raftel-Worst uses `--p0`, `totaltee=faults`, and fixed leader replica `faults+1`.
+
+Estimated running time: approximately 2 hours.
 
 ```bash
 cd /root/Raftel
@@ -267,7 +301,9 @@ View the results in:
 
 **Experiment 2 — TEE leader and quorum combinations (Figure 4)**
 
-This LAN experiment evaluates Raftel under four combinations: a TEE or non-TEE leader, with or without enough TEE replicas to form a TEE quorum. It uses `faults=32`, a batch size of 400, and a 256-byte payload.
+This LAN experiment evaluates Raftel under four combinations: a TEE or non-TEE leader, with or without enough TEE replicas to form a TEE quorum. Each set is evaluated with fault thresholds of 1, 2, 4, 8, 16, and 32, using a batch size of 400 and a 256-byte payload.
+
+Estimated running time: approximately 1.5 hours.
 
 ```bash
 cd /root/Raftel
@@ -276,14 +312,16 @@ bash experiments_reproduction/experiment2/script/run_lan.sh
 
 View the results in:
 
-- `experiments_reproduction/experiment2/stats.txt`: computed throughput and latency for the four cases.
+- `experiments_reproduction/experiment2/stats.txt`: computed throughput and latency for all 24 combinations, labeled `set<1-4>_f<faults>`.
 - `experiments_reproduction/experiment2/exe/`: compiled executables and generated `params.h` files.
-- `experiments_reproduction/experiment2/results/<case>/`: raw statistics for each case.
-- `experiments_reproduction/experiment2/log/<case>/`: orchestrator and remote-replica logs.
+- `experiments_reproduction/experiment2/results/set<1-4>_f<faults>/`: raw statistics for each combination.
+- `experiments_reproduction/experiment2/log/set<1-4>_f<faults>/`: orchestrator and remote-replica logs.
 
 **Experiment 3 — Redis end-to-end performance (Figure 6)**
 
 This experiment applies a 50 ms network delay and runs a Redis-backed, 100% SET workload with 1 KB values. It compares the end-to-end throughput and latency of the five protocols with `faults=8`, four clients, and three repetitions per protocol.
+
+Estimated running time: approximately 1.5 hours.
 
 ```bash
 cd /root/Raftel

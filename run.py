@@ -39,8 +39,8 @@ from scp import SCPClient
 # Each value is (replica-count factor, source branch). A factor of 3 means
 # 3f+1 replicas; a factor of 2 means 2f+1 replicas.
 _PROTOCOL_CHECKOUT = {
-    "HybridTEE": (3, "main"),
-    "Chained-HybridTEE": (3, "main"),
+    "Raftel": (3, "main"),
+    "Chained": (3, "main"),
     "Achilles": (2, "main"),
     "Hotstuff": (3, "main"),
     "Basic-Damysus": (2, "main"),
@@ -74,12 +74,12 @@ def tee_quorum_size(totaltee: int, faults: int) -> int:
 def protocol_totaltee(protocol: str, faults: int, totalnodes: int, requested: int) -> int:
     """Resolve the protocol-defined trusted replica population.
 
-    Only HybridTEE exposes a configurable trusted population.  The remaining
+    Only Raftel exposes a configurable trusted population.  The remaining
     protocols use the populations from their original protocol definitions.
     """
-    if protocol == "HybridTEE":
+    if protocol == "Raftel":
         return requested
-    if protocol == "Chained-HybridTEE":
+    if protocol == "Chained":
         return faults + 1
     if protocol in ("Achilles", "Basic-Damysus"):
         return totalnodes
@@ -94,7 +94,7 @@ def protocol_totaltee(protocol: str, faults: int, totalnodes: int, requested: in
 
 # run.py CLI flags vs experiments.py (for comparable experiments)
 # experiments.py uses --p1..--p8; run.py uses different numbering. Rough mapping:
-#   run --p0 HybridTEE          -> BASIC_HYBRID_TEE
+#   run --p0 Raftel             -> BASIC_HYBRID_TEE
 #   run --p1 Chained-Hybrid    ~ (no direct single flag; see experiments CH*)
 #   run --p2 Achilles          ~ experiments Achilles branch
 #   run --p3 Hotstuff          ~ experiments --p1 (BASE / BASIC_HOTSTUFF)
@@ -1741,12 +1741,12 @@ def mkParams(protocol,debug,constFactor,numFaults,totaltee,numTrans,payloadSize,
     f.write("#define PARAMS_H\n")
     f.write("\n")
     # f.write("#define " + protocol.value + "\n")
-    if protocol == "HybridTEE":
+    if protocol == "Raftel":
         if debug:
             f.write("#define BASIC_HYBRID_TEE_DEBUG\n")
         else:
             f.write("#define BASIC_HYBRID_TEE\n")
-    elif protocol == "Chained-HybridTEE":
+    elif protocol == "Chained":
         f.write("#define CHAINED_HYBRID_TEE\n")
     elif protocol == "Achilles":
         f.write("#define CHAINED_ACHILLES\n")
@@ -1756,7 +1756,7 @@ def mkParams(protocol,debug,constFactor,numFaults,totaltee,numTrans,payloadSize,
         f.write("#define BASIC_DAMYSUS\n")
     f.write("#define MAX_NUM_NODES " + str((constFactor*numFaults)+1) + "\n")
 
-    # if protocol == "Chained-HybridTEE":
+    # if protocol == "Chained":
     #     f.write("#define MAX_NUM_SIGNATURES " + str(numFaults+1) + "\n")
     # else:
     #     f.write("#define MAX_NUM_SIGNATURES " + str((constFactor*numFaults)+1-numFaults) + "\n")
@@ -2544,7 +2544,7 @@ def experiment_fault_cloud(
     server stats are pulled to this machine. plot_live_throughput() aggregates stats/live-* across
     replicas into mean throughput vs time (same as local --fault-local).
 
-    Typical HybridTEE WAN preset (example):
+    Typical Raftel WAN preset (example):
       --p0 --faults 8 --totaltee 9 --fault-cloud --view-timeout 2
     """
     kv_set = kv_set_ratio if kv_set is None else kv_set
@@ -2986,8 +2986,8 @@ def experiment(*args, repeats=1, stats_summary_label=None, **kwargs):
 def main():
     """Parse CLI options, prepare artifacts, and dispatch the selected run mode."""
     parser = argparse.ArgumentParser(description='Start one experiment with given parameters.')
-    parser.add_argument("--p0",        action="store_true",    help="run HybridTEE")
-    parser.add_argument("--p1",        action="store_true",    help="run Chained-HybridTEE")
+    parser.add_argument("--p0",        action="store_true",    help="run Raftel")
+    parser.add_argument("--p1",        action="store_true",    help="run Chained")
     parser.add_argument("--p2",        action="store_true",    help="run Achilles")
     parser.add_argument("--p3",        action="store_true",    help="run hotstuff")
     parser.add_argument("--p4",        action="store_true",    help="run basic Damysus")
@@ -3004,7 +3004,7 @@ def main():
     parser.add_argument('--batchsize', type=int,  default=400, help='MAX_NUM_TRANSACTIONS in params (compile-time batch capacity)')
     parser.add_argument('--payload',   type=int,  default=256, help='Payload size')
     parser.add_argument('--faults',    type=int,  default=1,   help='Number of faults')
-    parser.add_argument('--totaltee',  type=int,  default=0,   help='Number of TEE nodes for HybridTEE; other protocols use their protocol-defined value')
+    parser.add_argument('--totaltee',  type=int,  default=0,   help='Number of TEE nodes for Raftel; other protocols use their protocol-defined value')
     parser.add_argument('--pct',       type=int,  default=0,   help='counter delay')
     # Local experiment parity with experiments.py (execute/computeAvgStats)
     parser.add_argument('--views',type=int,default=10,help='numViews passed to each server (default 10, same as experiments.py)',)
@@ -3086,9 +3086,9 @@ def main():
             f.write(f"Start, numviews: {args.views}\n")
 
     if args.p0:
-        protocol = "HybridTEE"
+        protocol = "Raftel"
     elif args.p1:
-        protocol = "Chained-HybridTEE"
+        protocol = "Chained"
     elif args.p2:
         protocol = "Achilles"
     elif args.p3:
@@ -3096,7 +3096,7 @@ def main():
     elif args.p4:
         protocol = "Basic-Damysus"
     else:
-        protocol = "HybridTEE"
+        protocol = "Raftel"
 
     # if args.pct > 0:
     #     pct = args.pct
@@ -3105,12 +3105,12 @@ def main():
     total_nodes = num_replicas(factor, args.faults)
     # Resolve protocol-defined TEE populations before generating configs and
     # binaries so node roles, runtime thresholds, and compile-time capacities
-    # all use the same value.  Only HybridTEE honors --totaltee.
+    # all use the same value.  Only Raftel honors --totaltee.
     args.totaltee = protocol_totaltee(
         protocol, args.faults, total_nodes, args.totaltee
     )
-    if args.config_all_tee and protocol != "HybridTEE":
-        parser.error("--config-all-tee is only valid for HybridTEE")
+    if args.config_all_tee and protocol != "Raftel":
+        parser.error("--config-all-tee is only valid for Raftel")
     if args.totaltee < 0 or args.totaltee > total_nodes:
         parser.error(f"--totaltee must be between 0 and the replica count ({total_nodes})")
     if args.leader_id < 0 or args.leader_id >= total_nodes:

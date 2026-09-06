@@ -4,13 +4,15 @@ This experiment corresponds to Figure 3 in the paper. It adds a 50 ms `netem` de
 
 ## Configuration
 
-- Protocols: HybridTEE (`p0`), Chained-HybridTEE (`p1`), Achilles (`p2`), Hotstuff (`p3`), and Basic-Damysus (`p4`)
+- Protocol configurations: Raftel (`p0`), Chained (`p1`), Achilles (`p2`), Hotstuff (`p3`), Basic-Damysus (`p4`), and Raftel-Worst (`p0` with the worst-case leader configuration)
 - Fault thresholds: `1`, `2`, `4`, `8`, `16`, and `32`
 - Fixed parameters: `--batchsize 400 --payload 256`
 - Repetitions: one run per protocol/fault-threshold combination
-- HybridTEE uses `totaltee = faults + 1`; the other protocols use their protocol-defined TEE populations
+- Raftel uses `totaltee = faults + 1`; Raftel-Worst uses `totaltee = faults` and fixed leader replica `faults + 1`; the other protocols use their protocol-defined TEE populations
 
-The script runs 30 combinations. A run that produces zero throughput or zero latency is treated as failed. The remote `netem` configuration is removed when the script exits or is interrupted.
+The script runs 36 combinations: six configurations at each of the six fault thresholds. A run that produces zero throughput or zero latency is treated as failed. The remote `netem` configuration is removed when the script exits or is interrupted.
+
+Estimated running time: approximately 2 hours, assuming the configured nodes are available and no failed runs need to be repeated.
 
 Before the full experiment starts, the script removes the previous contents of `exe/`, `log/`, `out/`, and `results/` (except `.gitkeep`) and clears `stats.txt`. Copy any results that you want to retain before rerunning it. Before each individual run, `run.py` also clears `results/current/` locally and `stats/` on every remote host so that measurements from different combinations are not mixed.
 

@@ -14,14 +14,9 @@ SSH_KEY="${REPO}/TShard"
 IP_LIST_FILE="${REPO}/ip_list"
 STATS_FILE="${EXP_DIR}/stats.txt"
 
-# name|totaltee|leader-mode|leader-id
-cases=(
-    "tee-leader_no-tee-quorum|32|fixed|0"
-    "tee-leader_tee-quorum|33|fixed|0"
-    "nontee-leader_no-tee-quorum|32|fixed|33"
-    "nontee-leader_tee-quorum|33|fixed|33"
-)
-total_runs=${#cases[@]}
+sets=(set1 set2 set3 set4)
+fault_values=(1 2 4 8 16 32)
+total_runs=$(( ${#sets[@]} * ${#fault_values[@]} ))
 
 if [[ ! -f "${SSH_KEY}" ]]; then
     echo "SSH key not found: ${SSH_KEY}" >&2
@@ -64,17 +59,27 @@ done
 : > "${STATS_FILE}"
 
 run_one() {
-    local case_name="$1"
-    local totaltee="$2"
-    local leader_mode="$3"
-    local leader_id="$4"
-    local run_log_dir="${LOG_DIR}/${case_name}"
-    local run_result_dir="${RESULT_DIR}/${case_name}"
-    local label="${case_name}_m${totaltee}_${leader_mode}_leader${leader_id}"
+    local set_name="$1"
+    local faults="$2"
+    local totaltee leader_id
+    local label="${set_name}_f${faults}"
+    local run_log_dir="${LOG_DIR}/${label}"
+    local run_result_dir="${RESULT_DIR}/${label}"
     local rc summary_line
 
+    case "${set_name}" in
+        set1) totaltee=$((faults + 1)); leader_id=0 ;;
+        set2) totaltee=${faults};       leader_id=0 ;;
+        set3) totaltee=$((faults + 1)); leader_id=$((faults + 1)) ;;
+        set4) totaltee=${faults};       leader_id=$((faults + 1)) ;;
+        *)
+            echo "Unknown experiment set: ${set_name}" >&2
+            return 1
+            ;;
+    esac
+
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
-    echo "[$(date --iso-8601=seconds)] START ${case_name}"
+    echo "[$(date --iso-8601=seconds)] START ${label}: totaltee=${totaltee}, leader=${leader_id}"
 
     (
         cd "${REPO}"
@@ -82,9 +87,9 @@ run_one() {
             --experiment-number 2 \
             --batchsize 400 \
             --payload 256 \
-            --faults 32 \
+            --faults "${faults}" \
             --totaltee "${totaltee}" \
-            --leader-mode "${leader_mode}" \
+            --leader-mode fixed \
             --leader-id "${leader_id}" \
             --stats-summary-label "${label}"
     ) > >(tee "${run_log_dir}/orchestrator.log") 2>&1
@@ -102,17 +107,18 @@ run_one() {
         rc=1
     fi
 
-    echo "[$(date --iso-8601=seconds)] END ${case_name}, exit=${rc}"
+    echo "[$(date --iso-8601=seconds)] END ${label}, exit=${rc}"
     return "${rc}"
 }
 
 failed=0
-for case_spec in "${cases[@]}"; do
-    IFS='|' read -r case_name totaltee leader_mode leader_id <<< "${case_spec}"
-    if ! run_one "${case_name}" "${totaltee}" "${leader_mode}" "${leader_id}"; then
-        failed=$((failed + 1))
-    fi
-    sleep 5
+for set_name in "${sets[@]}"; do
+    for faults in "${fault_values[@]}"; do
+        if ! run_one "${set_name}" "${faults}"; then
+            failed=$((failed + 1))
+        fi
+        sleep 5
+    done
 done
 
 echo "Experiment 2 complete: $((total_runs - failed))/${total_runs} succeeded; statistics=${STATS_FILE}"

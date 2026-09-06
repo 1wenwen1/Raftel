@@ -16,7 +16,7 @@ STATS_FILE="${EXP_DIR}/stats.txt"
 PER_RUN_FILE="$(mktemp)"
 
 protocol_flags=(p0 p1 p2 p3 p4)
-protocol_names=(HybridTEE Chained-HybridTEE Achilles Hotstuff Basic-Damysus)
+protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus)
 repeats=3
 faults=8
 requested_totaltee=9
