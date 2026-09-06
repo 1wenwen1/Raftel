@@ -11,7 +11,7 @@ IP sources (first non-empty wins):
 
 Usage:
   python3 deployment/fetch_remote_logs.py
-  python3 deployment/fetch_remote_logs.py --out out/run1
+  python3 deployment/fetch_remote_logs.py --out log/manual-run1
   DAMYSUS_REMOTE_ROOT=/root/Raftel python3 deployment/fetch_remote_logs.py
 """
 
@@ -127,7 +127,7 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        default=project_root / "out",
+        default=project_root / "log" / "manual",
         help="Local directory to write into (per-node subdirs by IP)",
     )
     parser.add_argument(

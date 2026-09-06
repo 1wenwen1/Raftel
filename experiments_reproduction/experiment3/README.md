@@ -1,37 +1,57 @@
-# Experiment 3: Redis WAN end-to-end performance
+# Experiment 3: Redis WAN End-to-End Performance
 
-本实验在远程服务器上设置 `50ms` netem delay，测试五种协议的 Redis-backed KV workload：
+This experiment corresponds to Figure 6 in the paper. It adds a 50 ms `netem` delay to `eth0` on every remote host and compares the end-to-end performance of five protocols using a Redis-backed key-value workload.
 
-- 协议：`p0`、`p1`、`p2`、`p3`、`p4`；
-- `faults=8`，请求 `totaltee=9`；
-- 100% SET，value 大小为 1 KB，keyspace 为 10,000；
-- batchsize 400，payload 256；
-- 4 个并发客户端，每个客户端发送 2,000 条请求，无发送间隔；
-- 30 views，每种协议重复 3 次；
-- 固定节点 0 为 leader；
-- 使用 `--redis` 显式启动并使用远程 Redis backend。
+## Configuration
 
-`run.py` 只允许 HybridTEE 自定义 TEE 数量。实际配置为：HybridTEE 9 个 TEE、Chained-HybridTEE 9 个 TEE、Achilles 全部 17 个副本为 TEE、Hotstuff 0 个 TEE、Basic-Damysus 全部 17 个副本为 TEE。
+- Protocols: HybridTEE (`p0`), Chained-HybridTEE (`p1`), Achilles (`p2`), Hotstuff (`p3`), and Basic-Damysus (`p4`)
+- Fault threshold: `8`
+- Requested TEE population: `9`
+- Workload: 100% SET operations, 1 KB values, and a keyspace of 10,000 keys
+- Batch size: `400`
+- Payload size: `256` bytes
+- Clients: four concurrent clients, each sending 2,000 requests without an inter-request delay
+- Views: `30`
+- Repetitions: three per protocol, for 15 runs in total
+- Leader: fixed replica 0
+- Backend: Redis, enabled with `--redis`
 
-## 运行
+Only HybridTEE accepts a configurable `--totaltee` value. The effective TEE populations are nine for HybridTEE, nine for Chained-HybridTEE, all 17 replicas for Achilles, zero for Hotstuff, and all 17 replicas for Basic-Damysus.
+
+The remote `netem` configuration is removed when the script exits or is interrupted.
+
+## Prerequisites
+
+- `/root/Raftel/ip_list` must contain the remote host IP addresses.
+- `/root/Raftel/TShard` must be a valid SSH private key for the remote root user.
+- The remote project path must match `DAMYSUS_REMOTE_ROOT`; it defaults to `/root/Raftel`.
+- Redis and hiredis must be installed on every remote host.
+
+## Run
+
+Before starting, the script removes the previous contents of `exe/`, `log/`, `out/`, and `results/` (except `.gitkeep`) and clears `stats.txt`. Copy any results that you want to retain before rerunning it.
 
 ```bash
 cd /root/Raftel
-./experiments_reproduction/experiment3/script/run_redis_wan.sh
+bash experiments_reproduction/experiment3/script/run_redis_wan.sh
 ```
 
-如远程项目不在 `/root/Raftel`，请先设置 `DAMYSUS_REMOTE_ROOT`。脚本结束或中断时会移除远程服务器上的 netem delay。
+## Metrics
 
-## 测量指标
+- End-to-end reply throughput (KTPS): the total number of completed client requests divided by their shared reply-time window.
+- End-to-end latency: average, p50, p95, and p99 latency in milliseconds.
+- Number of requests completed in each run.
 
-- 系统端到端 reply throughput（KTPS）：所有客户端完成请求数除以它们共同的 reply 时间窗口；
-- E2E latency：average、p50、p95、p99，单位为 ms；
-- 每轮完成请求数。
+## Results
 
-## 输出
+All paths below are relative to `experiments_reproduction/experiment3/`:
 
-- `results/per-run.csv`：15 次运行各自的 E2E 指标；
-- `results/summary.csv`：按协议对成功运行取均值；
-- `results/raw/<protocol>_repeat<n>/`：每次运行的原始 stats 和 client E2E 文件；
-- `log/<protocol>_repeat<n>/orchestrator.log`：控制端完整输出；
-- `log/<protocol>_repeat<n>/remote/`：所有远程副本的 `out*` 日志。
+- `stats.txt`: final mean E2E metrics across successful repetitions, grouped by protocol.
+- `exe/`: compiled executables and generated `params.h` files, grouped by build configuration.
+- `results/raw/<protocol>_repeat<n>/`: raw statistics and `client-e2e-*` files preserved for each run.
+- `results/current/`: raw node statistics for the most recently executed run.
+- `log/current/`: client and remote-replica logs for the most recently executed run.
+- `log/<protocol>_repeat<n>/orchestrator.log`: complete coordinator output for each run.
+- `log/<protocol>_repeat<n>/remote/`: `out*` logs collected from the remote replicas.
+
+The script's final exit status is nonzero if any run fails. Check the corresponding `orchestrator.log` for error details.

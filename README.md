@@ -18,6 +18,7 @@ This repository contains the code accompanying the paper ["Breaking Fault Lines:
     - [Launch instances](#launch-instances)
     - [Configure the nodes](#configure-the-nodes)
     - [Run a cloud experiment](#run-a-cloud-experiment)
+    - [Experiments Reproduction](#experiments-reproduction)
 
 ## Current status
 
@@ -229,7 +230,7 @@ source /opt/intel/sgxsdk/environment
 python3 run.py --p0 --faults 1 --totaltee 2
 ```
 
-Add `--redis` to reproduce the Redis-backed KV path. Experiment statistics are collected under `stats/` and `stats.txt`. To copy remote `out<N>` stdout logs into per-node directories under local `out/`, run:
+Add `--redis` to reproduce the Redis-backed KV path. For each selected experiment directory, `run.py` stores compiled binaries and generated `params.h` files under `exe/`, the latest raw node results under `results/current/`, remote and client logs under `log/current/`, and computed statistics in `stats.txt`. To fetch remote `out<N>` logs manually into `log/manual/`, run:
 
 ```bash
 python3 deployment/fetch_remote_logs.py
@@ -241,3 +242,59 @@ Ali Cloud resources incur charges. When the experiment is complete, verify the I
 cd /root/Raftel
 python3 aliyun/delete_instances.py
 ```
+
+#### Experiments Reproduction
+
+The following scripts reproduce the main experiments corresponding to Figures 3, 4, and 6 in the paper. Run them after completing the Ali Cloud deployment and node configuration above. Before running a script, verify that `/root/Raftel/ip_list` contains the remote node IPs and `/root/Raftel/TShard` is a valid SSH private key.
+
+At the start of each experiment, its script removes the previous contents of that experiment's `exe/`, `log/`, `out/`, and `results/` directories (except `.gitkeep`) and starts a new `stats.txt`. Copy any results that you want to retain before rerunning an experiment.
+
+**Experiment 1 — WAN scalability (Figure 3)**
+
+This experiment applies a 50 ms network delay to the remote nodes and measures the throughput and latency of the five protocols with fault thresholds of 1, 2, 4, 8, 16, and 32.
+
+```bash
+cd /root/Raftel
+bash experiments_reproduction/experiment1/script/run_wan.sh
+```
+
+View the results in:
+
+- `experiments_reproduction/experiment1/stats.txt`: throughput and latency for every protocol/fault-threshold combination.
+- `experiments_reproduction/experiment1/exe/`: compiled executables and generated `params.h` files.
+- `experiments_reproduction/experiment1/results/<protocol>_f<faults>/`: raw statistics for each run.
+- `experiments_reproduction/experiment1/log/<protocol>_f<faults>/`: orchestrator and remote-replica logs.
+
+**Experiment 2 — TEE leader and quorum combinations (Figure 4)**
+
+This LAN experiment evaluates Raftel under four combinations: a TEE or non-TEE leader, with or without enough TEE replicas to form a TEE quorum. It uses `faults=32`, a batch size of 400, and a 256-byte payload.
+
+```bash
+cd /root/Raftel
+bash experiments_reproduction/experiment2/script/run_lan.sh
+```
+
+View the results in:
+
+- `experiments_reproduction/experiment2/stats.txt`: computed throughput and latency for the four cases.
+- `experiments_reproduction/experiment2/exe/`: compiled executables and generated `params.h` files.
+- `experiments_reproduction/experiment2/results/<case>/`: raw statistics for each case.
+- `experiments_reproduction/experiment2/log/<case>/`: orchestrator and remote-replica logs.
+
+**Experiment 3 — Redis end-to-end performance (Figure 6)**
+
+This experiment applies a 50 ms network delay and runs a Redis-backed, 100% SET workload with 1 KB values. It compares the end-to-end throughput and latency of the five protocols with `faults=8`, four clients, and three repetitions per protocol.
+
+```bash
+cd /root/Raftel
+bash experiments_reproduction/experiment3/script/run_redis_wan.sh
+```
+
+View the results in:
+
+- `experiments_reproduction/experiment3/stats.txt`: final mean E2E metrics grouped by protocol.
+- `experiments_reproduction/experiment3/exe/`: compiled executables and generated `params.h` files.
+- `experiments_reproduction/experiment3/results/raw/<protocol>_repeat<n>/`: raw statistics and client E2E measurements.
+- `experiments_reproduction/experiment3/log/<protocol>_repeat<n>/`: orchestrator and remote-replica logs.
+
+Each experiment directory also contains a dedicated `README.md` with its complete configuration and output layout.

@@ -19,6 +19,7 @@ from pathlib import Path
 import shlex
 import shutil
 import signal
+import stat
 import statistics
 import subprocess
 from subprocess import PIPE, Popen
@@ -111,12 +112,11 @@ ip_list = PROJECT_ROOT / "ip_list"
 clients = PROJECT_ROOT / "clients"
 close_py = PROJECT_ROOT / "close.py"
 
-# These output paths are initialized to their historical locations so importing
-# this module remains backwards-compatible. main() redirects all of them to the
-# selected experiment directory before generating files or launching processes.
+# These output paths are initialized to their historical root for import
+# compatibility. main() redirects them to the selected experiment directory.
 RUN_OUTPUT_ROOT = PROJECT_ROOT
-stats_dir = RUN_OUTPUT_ROOT / "stats"
-out_dir = RUN_OUTPUT_ROOT / "out"
+stats_dir = RUN_OUTPUT_ROOT / "results" / "current"
+out_dir = RUN_OUTPUT_ROOT / "log" / "current"
 stats_txt = RUN_OUTPUT_ROOT / "stats.txt"
 exen = RUN_OUTPUT_ROOT / "exe"
 client_stats_file = RUN_OUTPUT_ROOT / "client_stats"
@@ -177,10 +177,11 @@ allLocalRedisPorts = []
 def configure_output_paths(local: bool, experiment_number: Optional[int]) -> None:
     """Route generated artifacts to the directory for the selected run.
 
-    The C++ binaries still read ``config`` and write ``stats/`` relative to
-    their working directory. Local processes therefore run with
-    ``RUN_OUTPUT_ROOT`` as their cwd. Remote processes keep their existing
-    remote layout; only locally generated and collected files are redirected.
+    Raw per-node measurements are collected under ``results/current`` and
+    process logs under ``log/current``. Batch experiment wrappers archive those
+    current-run files into case-specific subdirectories. Compiled binaries and
+    generated params are cached under ``exe``; computed summaries are appended
+    to ``stats.txt``.
     """
     global RUN_OUTPUT_ROOT, addresses, statsdir, stats_dir, out_dir, stats_txt, exen
     global client_stats_file
@@ -199,9 +200,9 @@ def configure_output_paths(local: bool, experiment_number: Optional[int]) -> Non
         )
 
     addresses = RUN_OUTPUT_ROOT / "config"
-    stats_dir = RUN_OUTPUT_ROOT / "stats"
+    stats_dir = RUN_OUTPUT_ROOT / "results" / "current"
     statsdir = str(stats_dir)
-    out_dir = RUN_OUTPUT_ROOT / "out"
+    out_dir = RUN_OUTPUT_ROOT / "log" / "current"
     stats_txt = RUN_OUTPUT_ROOT / "stats.txt"
     exen = RUN_OUTPUT_ROOT / "exe"
     client_stats_file = RUN_OUTPUT_ROOT / "client_stats"
@@ -289,6 +290,37 @@ def scp_to_node(ip, files):
 def remote_stats_dir() -> str:
     """Remote stats directory on each cluster node (under REMOTE_PROJECT_ROOT)."""
     return str(REMOTE_PROJECT_ROOT / "stats")
+
+
+def ssh_clear_remote_stats_on_host(ip: str) -> None:
+    """Recreate the remote stats directory once before launching replicas."""
+    remote_stats = remote_stats_dir()
+    bash = (
+        f"mkdir -p {shlex.quote(remote_stats)} && "
+        f"find {shlex.quote(remote_stats)} -mindepth 1 -maxdepth 1 -delete"
+    )
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.connect(ip, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
+    stdin, stdout, stderr = ssh.exec_command("bash -lc " + shlex.quote(bash))
+    exit_code = stdout.channel.recv_exit_status()
+    err = stderr.read().decode().strip()
+    ssh.close()
+    if exit_code != 0:
+        raise RuntimeError(
+            f"clear remote stats failed on {ip}: exit={exit_code} err={err}"
+        )
+
+
+def ssh_clear_remote_stats_on_hosts(ip_list, max_workers=6) -> None:
+    """Clear each distinct remote host's stats directory exactly once."""
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(ssh_clear_remote_stats_on_host, ip)
+            for ip in sorted(set(ip_list))
+        ]
+        for future in as_completed(futures):
+            future.result()
 
 
 def ssh_exec_server_non_blocking(
@@ -521,12 +553,48 @@ def ssh_kill_sgxserver_on_host(host: str, replica_id=None) -> None:
     ssh.close()
 
 
+def ssh_stop_project_servers_on_host(host: str) -> None:
+    """Stop all server processes launched from this repository on one host."""
+    patterns = (r"^[.]/sgxserver( |$)", r"^[.]/server( |$)")
+    bash = " && ".join(
+        f"( pkill -TERM -f {shlex.quote(pattern)} || true )"
+        for pattern in patterns
+    )
+    bash += "; sleep 1; " + " && ".join(
+        f"( pkill -KILL -f {shlex.quote(pattern)} || true )"
+        for pattern in patterns
+    )
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.connect(host, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
+    stdin, stdout, stderr = ssh.exec_command("bash -lc " + shlex.quote(bash))
+    exit_code = stdout.channel.recv_exit_status()
+    err = stderr.read().decode().strip()
+    ssh.close()
+    if exit_code != 0:
+        raise RuntimeError(
+            f"stop remote project servers failed on {host}: exit={exit_code} err={err}"
+        )
+
+
+def ssh_stop_project_servers_on_hosts(hosts, max_workers=6) -> None:
+    """Stop repository server processes on every distinct participating host."""
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(ssh_stop_project_servers_on_host, host)
+            for host in sorted(set(hosts))
+        ]
+        for future in as_completed(futures):
+            future.result()
+
+
 def poll_remote_stats_forever(ips, stop_event: threading.Event, interval_sec: float):
     """Periodically mirror every node's remote stats into this run's output tree."""
-    remote_stats = remote_stats_dir() + os.sep
+    remote_stats = remote_stats_dir()
     while not stop_event.wait(interval_sec):
         try:
-            scp_stats_from_nodes(ips, str(RUN_OUTPUT_ROOT) + os.sep, remote_stats)
+            stats_dir.mkdir(parents=True, exist_ok=True)
+            scp_stats_from_nodes(ips, str(stats_dir) + os.sep, remote_stats)
         except Exception as e:
             print("[fault-cloud] stats poll failed:", e)
 
@@ -672,9 +740,19 @@ def rm_local_stats():
     error = stderr.decode()
 
 def stop_remote_server():
-    """Run the repository's cluster-wide remote shutdown helper."""
-    cmd = f"python3 {close_py}"
-    subprocess.run(cmd, shell=True, check=True)
+    """Stop project servers on every host in the generated run IP list."""
+    ssh_stop_project_servers_on_hosts(read_ip_list(str(ip_list)))
+
+
+def stop_local_clients() -> None:
+    """Stop orchestrator-local clients left by an interrupted remote repeat."""
+    for process_name in ("sgxclient", "client"):
+        subprocess.run(
+            ["pkill", "-TERM", "-x", process_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
 
 
 # Block and wait for all sgxserver instances to end
@@ -700,10 +778,38 @@ def wait_for_all_sgxservers_to_finish(completion_set, lock, total_servers):
 
 
 def clear_local_stats():
-    """Recreate an empty local statistics directory."""
+    """Clear current raw results and prepare the C++ compatibility directory."""
     if stats_dir.exists() and stats_dir.is_dir():
         shutil.rmtree(stats_dir)
     stats_dir.mkdir(parents=True, exist_ok=True)
+
+    # Server/client binaries still write files below a relative ``stats/``.
+    # Keep that directory only while a run is active, then migrate its files.
+    legacy_dir = RUN_OUTPUT_ROOT / "stats"
+    if legacy_dir.exists() and legacy_dir.is_dir():
+        shutil.rmtree(legacy_dir)
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+
+
+def migrate_legacy_stats() -> None:
+    """Move C++ ``stats/`` output into ``results/current`` and remove ``stats/``."""
+    legacy_dir = RUN_OUTPUT_ROOT / "stats"
+    if not legacy_dir.is_dir():
+        return
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    for source in legacy_dir.iterdir():
+        target = stats_dir / source.name
+        if source.is_dir():
+            if target.exists():
+                shutil.copytree(source, target, dirs_exist_ok=True)
+                shutil.rmtree(source)
+            else:
+                shutil.move(str(source), str(target))
+        else:
+            if target.exists():
+                target.unlink()
+            shutil.move(str(source), str(target))
+    legacy_dir.rmdir()
 
 def cleanup_local_processes_and_ports(local_ports=None, include_redis=False):
     """
@@ -858,17 +964,24 @@ def kill_local_process_tree(proc: subprocess.Popen):
 # ---------------------------------------------------------------------------
 
 def scp_stats_from_node(ip, local_path, remote_path):
-    """Recursively copy one host's statistics tree to ``local_path``."""
+    """Copy regular result files from one host directly into ``local_path``."""
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
     ssh.connect(ip, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
-    transport = ssh.get_transport()
-    if transport is None:
-        raise RuntimeError(f"Failed to get transport for {ip}")
-
-    with SCPClient(transport) as scp:
-        scp.get(remote_path, local_path=local_path, recursive=True)
-    ssh.close()
+    sftp = ssh.open_sftp()
+    destination = Path(local_path)
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        for entry in sftp.listdir_attr(remote_path):
+            if not stat.S_ISREG(entry.st_mode):
+                continue
+            sftp.get(
+                f"{remote_path.rstrip('/')}/{entry.filename}",
+                str(destination / entry.filename),
+            )
+    finally:
+        sftp.close()
+        ssh.close()
 
 # Multi-threaded SCP stats content to local
 def scp_stats_from_nodes(ip_list, local_path, remote_path, max_workers=6):
@@ -881,7 +994,7 @@ def scp_stats_from_nodes(ip_list, local_path, remote_path, max_workers=6):
 
 def clear_local_client_logs():
     """
-    Remove orchestrator client logs under out/ (client-*.log) so each run.py
+    Remove orchestrator client logs under log/current (client-*.log) so each run.py
     execution only keeps the latest client output.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -892,7 +1005,7 @@ def clear_local_client_logs():
 
 def clear_local_out_logs():
     """
-    Remove stale remote-server out* logs before re-fetching from nodes.
+    Remove stale remote-server out* logs from log/current before re-fetching.
     Preserve orchestrator client logs (client-*.log) written during this run.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -907,7 +1020,7 @@ def clear_remote_server_out_logs():
     """
     Remove files previously fetched by scp_out_logs_from_node (names like
     "<host_with_underscores>-out..."). Does not delete client-*.log or other files.
-    Call before each cloud experiment so out/ is not mixed with the last run's server logs.
+    Call before each cloud experiment so log/current is not mixed with the last run.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     for fp in out_dir.glob("*"):
@@ -957,7 +1070,7 @@ def ssh_clear_repo_out_logs_on_hosts(ip_list, max_workers=6):
 
 def scp_out_logs_from_node(ip: str, local_out_path: str):
     """
-    Fetch remote out* logs from REMOTE_PROJECT_ROOT into local out/ directory.
+    Fetch remote out* logs from REMOTE_PROJECT_ROOT into local log/current.
     Prefix each filename with source host to avoid collisions.
     """
     ssh = SSHClient()
@@ -990,13 +1103,15 @@ def scp_out_logs_from_nodes(ip_list, local_out_path, max_workers=6):
 
 
 def collect_remote_artifacts(ips) -> None:
-    """Collect server stdout even when copying the statistics tree fails."""
+    """Collect raw node results and server logs into the current-run folders."""
+    migrate_legacy_stats()
     stats_error = None
     try:
+        stats_dir.mkdir(parents=True, exist_ok=True)
         scp_stats_from_nodes(
             ips,
-            str(RUN_OUTPUT_ROOT) + os.sep,
-            remote_stats_dir() + os.sep,
+            str(stats_dir) + os.sep,
+            remote_stats_dir(),
         )
     except Exception as exc:
         stats_error = exc
@@ -1026,7 +1141,7 @@ def find_first_number(directory):
     return None
 
 def calculate_mean_of_values(directory, *, silent=False):
-    """Average the first two values across all ``vals*`` files."""
+    """Average valid non-zero throughput/latency pairs from ``vals*`` files."""
     vals_files = glob.glob(os.path.join(directory, 'vals*'))
     total_count = 0
     sum_first = 0.0
@@ -1038,6 +1153,13 @@ def calculate_mean_of_values(directory, *, silent=False):
             if line:
                 values = list(map(float, line.split()))
                 if len(values) >= 2:
+                    if values[0] == 0.0 or values[1] == 0.0:
+                        if not silent:
+                            print(
+                                f"Skipping abnormal zero-valued stats: "
+                                f"{file_path}: {values[0]}, {values[1]}"
+                            )
+                        continue
                     sum_first += values[0]
                     sum_second += values[1]
                     if not silent:
@@ -1070,6 +1192,7 @@ def compute_stats_like_experiments(stats_directory: str):
     Same aggregation as experiments.computeStats: read each stats/vals* file
     (10 space-separated fields) and return view-averaged throughput/latency/etc.
     """
+    migrate_legacy_stats()
     sd = stats_directory.rstrip(os.sep) + os.sep
     throughput_view_val = 0.0
     throughput_view_num = 0
@@ -1597,13 +1720,14 @@ def makeInstance(protocol, debug, batchsize, payload, faults, totaltee, pct):
         subprocess.call(["make","clean"])
         if debug:
             subprocess.call(["make","-j8","server","client"])
-            subprocess.call(["cp", "server", f"{pro_dir}/"])
-            subprocess.call(["cp", "App/params.h", f"{pro_dir}/"]) 
+            for artifact in ("server", "client"):
+                shutil.copy2(PROJECT_ROOT / artifact, folder_path)
         else:
             subprocess.run(["bash -c \"" + srcsgx + "\""], shell=True, check=True)
             subprocess.call(["make","-j",str(numMakeCores),"SGX_MODE="+sgxmode])
-            subprocess.call(["cp", "sgxserver", f"{pro_dir}/"]) 
-            subprocess.call(["cp", "App/params.h", f"{pro_dir}/"]) 
+            for artifact in ("sgxserver", "sgxclient", "sgxkeys"):
+                shutil.copy2(PROJECT_ROOT / artifact, folder_path)
+        shutil.copy2(PROJECT_ROOT / "App" / "params.h", Path(folder_path) / "params.h")
         print("make finished")
     else:
         print("Skipping make process")
@@ -2619,7 +2743,7 @@ def experiment_fault_cloud(
 
 
 #conduct a experiment
-def experiment(
+def experiment_once(
     protocol,
     debug,
     batchsize,
@@ -2644,6 +2768,7 @@ def experiment(
     leader_id=0,
     stats_summary_label=None,
     redis_enabled=False,
+    write_summary=True,
 ):
     """
     Remote cluster run aligned with experiment_local(): Redis per replica, server argv includes
@@ -2683,7 +2808,8 @@ def experiment(
             str(PROJECT_ROOT / "enclave.signed.so"),
             str(PROJECT_ROOT / "sgxkeys"),
         ]
-    rm_local_stats()
+    clear_local_stats()
+    ssh_clear_remote_stats_on_hosts(ips)
     clear_remote_server_out_logs()
     clear_local_client_logs()
     ssh_clear_repo_out_logs_on_hosts(ips)
@@ -2705,6 +2831,7 @@ def experiment(
         view_timeout=view_timeout,
         leader_mode=leader_mode,
         leader_id=leader_id,
+        clear_remote_stats=False,
         redis_enabled=redis_enabled,
     )
     print("start")
@@ -2776,20 +2903,23 @@ def experiment(
         ea,
     )
 
-    if stats_summary_label is None:
-        with open(stats_txt, 'a') as f:
-            if e2e_stats is not None:
-                f.write(
-                    f"{pro_dir}, server_vals_thr_mean={r1}, server_vals_lat_mean={r2}, "
-                    f"e2e_reply_tps={er}, e2e_lat_avg_ms={ea},\n"
-                )
-            else:
-                f.write(
-                    f"{pro_dir}, server_vals_thr_mean={r1}, server_vals_lat_mean={r2}, "
-                    f"e2e_reply_tps=0, e2e_lat_avg_ms=0, e2e_missing=1,\n"
-                )
-    else:
-        append_wan_stats_summary_row(stats_summary_label, r1, r2)
+    if write_summary:
+        if stats_summary_label is None:
+            with open(stats_txt, 'a') as f:
+                if e2e_stats is not None:
+                    f.write(
+                        f"{pro_dir}, server_vals_thr_mean={r1}, server_vals_lat_mean={r2}, "
+                        f"e2e_reply_tps={er}, e2e_lat_avg_ms={ea},\n"
+                    )
+                else:
+                    f.write(
+                        f"{pro_dir}, server_vals_thr_mean={r1}, server_vals_lat_mean={r2}, "
+                        f"e2e_reply_tps=0, e2e_lat_avg_ms=0, e2e_missing=1,\n"
+                    )
+        else:
+            append_wan_stats_summary_row(stats_summary_label, r1, r2)
+
+    return r1, r2
 
 
     # Wait and execute sgxclient on the host with id:0
@@ -2797,6 +2927,59 @@ def experiment(
 
     # Multi-threaded SCP from node to local
     # scp_files_from_nodes(ip_list)o
+
+
+def experiment(*args, repeats=1, stats_summary_label=None, **kwargs):
+    """Run a normal remote experiment repeatedly and report one arithmetic mean."""
+    if repeats < 1:
+        raise ValueError("repeats must be at least 1")
+
+    throughput_values = []
+    latency_values = []
+    participating_hosts = read_ip_list(str(ip_list))
+    for rep in range(repeats):
+        print(f"[remote-repeat] {rep + 1}/{repeats}")
+        # A prior interrupted run may still be executing the deployed binary,
+        # which makes SCP fail with "Text file busy" when replacing it.
+        ssh_stop_project_servers_on_hosts(participating_hosts)
+        try:
+            throughput, latency = experiment_once(
+                *args,
+                stats_summary_label=stats_summary_label,
+                write_summary=False,
+                **kwargs,
+            )
+        finally:
+            # Servers normally exit by themselves, but always remove stragglers
+            # before the next repeat and when this repeat raises an exception.
+            ssh_stop_project_servers_on_hosts(participating_hosts)
+            stop_local_clients()
+        throughput_values.append(throughput)
+        latency_values.append(latency)
+
+    valid_pairs = [
+        (throughput, latency)
+        for throughput, latency in zip(throughput_values, latency_values)
+        if throughput != 0.0 and latency != 0.0
+    ]
+    skipped = repeats - len(valid_pairs)
+    if not valid_pairs:
+        raise RuntimeError(
+            f"all {repeats} remote repeats produced zero throughput or latency"
+        )
+    mean_throughput = sum(value[0] for value in valid_pairs) / len(valid_pairs)
+    mean_latency = sum(value[1] for value in valid_pairs) / len(valid_pairs)
+    print(
+        f"[remote-repeat] mean over {len(valid_pairs)}/{repeats} valid runs "
+        f"(skipped_zero={skipped}): "
+        f"server_vals_thr_mean={mean_throughput} "
+        f"server_vals_lat_mean={mean_latency}"
+    )
+    if stats_summary_label is not None:
+        append_wan_stats_summary_row(
+            stats_summary_label, mean_throughput, mean_latency
+        )
+    return mean_throughput, mean_latency
 
 
 
@@ -2828,7 +3011,7 @@ def main():
     parser.add_argument('--cl-trans',type=int,default=1,dest='cl_trans',help='number of transactions sent by each client (default 1)',)
     parser.add_argument('--cl-num',type=int,default=1,dest='cl_num',help='number of clients to start (default 1)',)
     parser.add_argument('--cl-sleep',type=int,default=0,dest='cl_sleep',help='client sleep interval in microseconds between sends (default 0)',)
-    parser.add_argument('--repeats',type=int,default=1,help='repeat local run and average stats (like experiments --repeats)',)
+    parser.add_argument('--repeats',type=int,default=1,help='repeat the run and average stats (default 1)',)
     parser.add_argument('--config-by-totaltee',action='store_true',help='deprecated: now default behavior; local config already follows --totaltee',)
     parser.add_argument('--config-all-tee',action='store_true',help='legacy mode: force local config to all isTEE:1',)
     parser.add_argument('--opdist',type=int,default=0,help='server argv opdist (default 0, same as experiments.py)',)
@@ -2886,6 +3069,8 @@ def main():
         parser.error("use only one of --fault-cloud and --fault-local")
     if args.experiment_number is not None and args.experiment_number < 0:
         parser.error("--experiment-number must be at least 0")
+    if args.repeats < 1:
+        parser.error("--repeats must be at least 1")
 
     configure_output_paths(args.local, args.experiment_number)
 
@@ -3035,6 +3220,7 @@ def main():
                 view_timeout=args.view_timeout,
                 leader_mode=args.leader_mode,
                 leader_id=args.leader_id,
+                repeats=args.repeats,
                 stats_summary_label=args.stats_summary_label,
                 redis_enabled=args.redis,
             )

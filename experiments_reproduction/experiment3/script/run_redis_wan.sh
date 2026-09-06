@@ -4,12 +4,16 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 EXP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+EXE_DIR="${EXP_DIR}/exe"
 LOG_DIR="${EXP_DIR}/log"
+OUT_DIR="${EXP_DIR}/out"
 RESULT_DIR="${EXP_DIR}/results"
+CURRENT_LOG_DIR="${LOG_DIR}/current"
+CURRENT_RESULT_DIR="${RESULT_DIR}/current"
 SSH_KEY="${REPO}/TShard"
 IP_LIST_FILE="${REPO}/ip_list"
-PER_RUN_FILE="${RESULT_DIR}/per-run.csv"
-SUMMARY_FILE="${RESULT_DIR}/summary.csv"
+STATS_FILE="${EXP_DIR}/stats.txt"
+PER_RUN_FILE="$(mktemp)"
 
 protocol_flags=(p0 p1 p2 p3 p4)
 protocol_names=(HybridTEE Chained-HybridTEE Achilles Hotstuff Basic-Damysus)
@@ -19,8 +23,6 @@ requested_totaltee=9
 clients=4
 transactions_per_client=2000
 views=30
-
-mkdir -p "${LOG_DIR}" "${RESULT_DIR}"
 
 if [[ ! -f "${SSH_KEY}" ]]; then
     echo "SSH key not found: ${SSH_KEY}" >&2
@@ -37,6 +39,23 @@ if (( ${#remote_ips[@]} == 0 )); then
     exit 1
 fi
 
+clear_experiment_dir() {
+    local dir="$1"
+    local entry
+    mkdir -p "${dir}"
+    shopt -s dotglob nullglob
+    for entry in "${dir}"/*; do
+        [[ "${entry##*/}" == ".gitkeep" ]] && continue
+        rm -rf -- "${entry}"
+    done
+    shopt -u dotglob nullglob
+}
+
+for dir in "${EXE_DIR}" "${LOG_DIR}" "${OUT_DIR}" "${RESULT_DIR}"; do
+    clear_experiment_dir "${dir}"
+done
+: > "${STATS_FILE}"
+
 remove_wan_delay() {
     local ip
     for ip in "${remote_ips[@]}"; do
@@ -44,7 +63,11 @@ remove_wan_delay() {
             "sudo tc qdisc del dev eth0 root 2>/dev/null || true" || true
     done
 }
-trap remove_wan_delay EXIT INT TERM
+cleanup() {
+    remove_wan_delay
+    rm -f "${PER_RUN_FILE}"
+}
+trap cleanup EXIT INT TERM
 
 echo "Configuring 50ms WAN delay on ${#remote_ips[@]} remote host(s)..."
 for ip in "${remote_ips[@]}"; do
@@ -53,7 +76,6 @@ for ip in "${remote_ips[@]}"; do
 done
 
 printf 'protocol,repeat,e2e_throughput_ktps,e2e_latency_avg_ms,e2e_latency_p50_ms,e2e_latency_p95_ms,e2e_latency_p99_ms,num_completed,status\n' > "${PER_RUN_FILE}"
-: > "${REPO}/stats.txt"
 
 run_one() {
     local flag="$1"
@@ -70,6 +92,7 @@ run_one() {
     (
         cd "${REPO}"
         python3 run.py "--${flag}" \
+            --experiment-number 3 \
             --batchsize 400 \
             --payload 256 \
             --faults "${faults}" \
@@ -89,11 +112,11 @@ run_one() {
     ) > >(tee "${run_log_dir}/orchestrator.log") 2>&1
     rc=${PIPESTATUS[0]}
 
-    if [[ -d "${REPO}/out" ]]; then
-        cp -a "${REPO}/out/." "${run_log_dir}/remote/"
+    if [[ -d "${CURRENT_LOG_DIR}" ]]; then
+        cp -a "${CURRENT_LOG_DIR}/." "${run_log_dir}/remote/"
     fi
-    if [[ -d "${REPO}/stats" ]]; then
-        cp -a "${REPO}/stats/." "${run_result_dir}/"
+    if [[ -d "${CURRENT_RESULT_DIR}" ]]; then
+        cp -a "${CURRENT_RESULT_DIR}/." "${run_result_dir}/"
     fi
 
     if [[ ${rc} -eq 0 ]]; then
@@ -121,7 +144,7 @@ for i in "${!protocol_flags[@]}"; do
     done
 done
 
-python3 "${SCRIPT_DIR}/summarize_e2e.py" aggregate "${PER_RUN_FILE}" "${SUMMARY_FILE}"
+python3 "${SCRIPT_DIR}/summarize_e2e.py" aggregate "${PER_RUN_FILE}" "${STATS_FILE}"
 total_runs=$(( ${#protocol_flags[@]} * repeats ))
-echo "Experiment 3 complete: $((total_runs - failed))/${total_runs} succeeded; summary=${SUMMARY_FILE}"
+echo "Experiment 3 complete: $((total_runs - failed))/${total_runs} succeeded; statistics=${STATS_FILE}"
 (( failed == 0 ))

@@ -4,11 +4,15 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 EXP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+EXE_DIR="${EXP_DIR}/exe"
 LOG_DIR="${EXP_DIR}/log"
+OUT_DIR="${EXP_DIR}/out"
 RESULT_DIR="${EXP_DIR}/results"
+CURRENT_LOG_DIR="${LOG_DIR}/current"
+CURRENT_RESULT_DIR="${RESULT_DIR}/current"
 SSH_KEY="${REPO}/TShard"
 IP_LIST_FILE="${REPO}/ip_list"
-SUMMARY_FILE="${RESULT_DIR}/summary.csv"
+STATS_FILE="${EXP_DIR}/stats.txt"
 
 # name|totaltee|leader-mode|leader-id
 cases=(
@@ -18,8 +22,6 @@ cases=(
     "nontee-leader_tee-quorum|33|fixed|33"
 )
 total_runs=${#cases[@]}
-
-mkdir -p "${LOG_DIR}" "${RESULT_DIR}"
 
 if [[ ! -f "${SSH_KEY}" ]]; then
     echo "SSH key not found: ${SSH_KEY}" >&2
@@ -36,6 +38,22 @@ if (( ${#remote_ips[@]} == 0 )); then
     exit 1
 fi
 
+clear_experiment_dir() {
+    local dir="$1"
+    local entry
+    mkdir -p "${dir}"
+    shopt -s dotglob nullglob
+    for entry in "${dir}"/*; do
+        [[ "${entry##*/}" == ".gitkeep" ]] && continue
+        rm -rf -- "${entry}"
+    done
+    shopt -u dotglob nullglob
+}
+
+for dir in "${EXE_DIR}" "${LOG_DIR}" "${OUT_DIR}" "${RESULT_DIR}"; do
+    clear_experiment_dir "${dir}"
+done
+
 # LAN baseline: remove any netem/root qdisc left by a previous WAN experiment.
 echo "Removing existing root qdisc on ${#remote_ips[@]} remote host(s)..."
 for ip in "${remote_ips[@]}"; do
@@ -43,8 +61,7 @@ for ip in "${remote_ips[@]}"; do
         "sudo tc qdisc del dev eth0 root 2>/dev/null || true"
 done
 
-printf 'case,totaltee,leader_mode,leader_id,server_throughput_mean,server_latency_mean,status\n' > "${SUMMARY_FILE}"
-: > "${REPO}/stats.txt"
+: > "${STATS_FILE}"
 
 run_one() {
     local case_name="$1"
@@ -54,7 +71,7 @@ run_one() {
     local run_log_dir="${LOG_DIR}/${case_name}"
     local run_result_dir="${RESULT_DIR}/${case_name}"
     local label="${case_name}_m${totaltee}_${leader_mode}_leader${leader_id}"
-    local rc summary_line metrics
+    local rc summary_line
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
     echo "[$(date --iso-8601=seconds)] START ${case_name}"
@@ -62,6 +79,7 @@ run_one() {
     (
         cd "${REPO}"
         python3 run.py --p0 \
+            --experiment-number 2 \
             --batchsize 400 \
             --payload 256 \
             --faults 32 \
@@ -72,23 +90,16 @@ run_one() {
     ) > >(tee "${run_log_dir}/orchestrator.log") 2>&1
     rc=${PIPESTATUS[0]}
 
-    if [[ -d "${REPO}/out" ]]; then
-        cp -a "${REPO}/out/." "${run_log_dir}/remote/"
+    if [[ -d "${CURRENT_LOG_DIR}" ]]; then
+        cp -a "${CURRENT_LOG_DIR}/." "${run_log_dir}/remote/"
     fi
-    if [[ -d "${REPO}/stats" ]]; then
-        cp -a "${REPO}/stats/." "${run_result_dir}/"
+    if [[ -d "${CURRENT_RESULT_DIR}" ]]; then
+        cp -a "${CURRENT_RESULT_DIR}/." "${run_result_dir}/"
     fi
 
-    summary_line="$(tail -n 1 "${REPO}/stats.txt" 2>/dev/null || true)"
-    if [[ ${rc} -eq 0 && "${summary_line}" == "${label}, "* ]]; then
-        metrics="${summary_line#"${label}, "}"
-        printf '%s,%s,%s,%s,%s,success\n' \
-            "${case_name}" "${totaltee}" "${leader_mode}" "${leader_id}" "${metrics}" \
-            >> "${SUMMARY_FILE}"
-    else
-        printf '%s,%s,%s,%s,,,failed(%d)\n' \
-            "${case_name}" "${totaltee}" "${leader_mode}" "${leader_id}" "${rc}" \
-            >> "${SUMMARY_FILE}"
+    summary_line="$(tail -n 1 "${STATS_FILE}" 2>/dev/null || true)"
+    if [[ ${rc} -ne 0 || "${summary_line}" != "${label}, "* ]]; then
+        rc=1
     fi
 
     echo "[$(date --iso-8601=seconds)] END ${case_name}, exit=${rc}"
@@ -104,6 +115,5 @@ for case_spec in "${cases[@]}"; do
     sleep 5
 done
 
-cp "${REPO}/stats.txt" "${RESULT_DIR}/run.py-summary-raw.txt"
-echo "Experiment 2 complete: $((total_runs - failed))/${total_runs} succeeded; summary=${SUMMARY_FILE}"
+echo "Experiment 2 complete: $((total_runs - failed))/${total_runs} succeeded; statistics=${STATS_FILE}"
 (( failed == 0 ))

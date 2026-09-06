@@ -1,37 +1,49 @@
-# Experiment 2: LAN leader/quorum combinations
+# Experiment 2: LAN Leader and Quorum Combinations
 
-本实验不增加网络延迟。脚本开始时会删除远程服务器 `eth0` 上可能由 WAN 实验遗留的 root qdisc，然后运行 HybridTEE（`p0`）的四种组合。固定参数为：
+This experiment corresponds to Figure 4 in the paper. It evaluates HybridTEE under four combinations of leader type and TEE-quorum availability in a LAN environment. The script does not add network delay and removes any root `qdisc` left on `eth0` by an earlier WAN experiment.
+
+The fixed parameters are:
 
 ```text
 --batchsize 400 --payload 256 --faults 32
 ```
 
-## 实验组合
+## Configurations
 
-| Case | totaltee | Leader mode | 实际 leader 类型 | TEE quorum |
-|---|---:|---|---|---|
-| `tee-leader_no-tee-quorum` | 32 | fixed，节点 0 | TEE | 不可组成 |
-| `tee-leader_tee-quorum` | 33 | fixed，节点 0 | TEE | 可以组成 |
-| `nontee-leader_no-tee-quorum` | 32 | fixed，节点 33 | non-TEE | 不可组成 |
-| `nontee-leader_tee-quorum` | 33 | fixed，节点 33 | non-TEE | 可以组成 |
+| Case | `totaltee` | Leader | TEE quorum |
+| --- | ---: | --- | --- |
+| `tee-leader_no-tee-quorum` | 32 | fixed TEE replica 0 | unavailable |
+| `tee-leader_tee-quorum` | 33 | fixed TEE replica 0 | available |
+| `nontee-leader_no-tee-quorum` | 32 | fixed non-TEE replica 33 | unavailable |
+| `nontee-leader_tee-quorum` | 33 | fixed non-TEE replica 33 | available |
 
-节点编号从 0 开始。`totaltee=33` 表示节点 `0–32` 是 TEE，因此节点 `33` 是 non-TEE。
+Replica IDs start at 0. With `totaltee=33`, replicas 0 through 32 are TEE replicas, so replica 33 is non-TEE. All four cases use a fixed leader; the leader does not rotate between views.
 
-四组实验都显式使用固定 leader：前两组使用 TEE 节点 `0`，后两组使用 non-TEE 节点 `33`，因此 leader 在整个实验期间不会随 view 轮换。
+## Prerequisites
 
-## 运行
+- `/root/Raftel/ip_list` must contain the remote host IP addresses.
+- `/root/Raftel/TShard` must be a valid SSH private key for the remote root user.
+- The remote project path must match `DAMYSUS_REMOTE_ROOT`; it defaults to `/root/Raftel`.
+
+## Run
+
+Before starting, the script removes the previous contents of `exe/`, `log/`, `out/`, and `results/` (except `.gitkeep`) and clears `stats.txt`. Copy any results that you want to retain before rerunning it.
 
 ```bash
 cd /root/Raftel
-./experiments_reproduction/experiment2/script/run_lan.sh
+bash experiments_reproduction/experiment2/script/run_lan.sh
 ```
 
-如远程项目不在 `/root/Raftel`，请先设置 `DAMYSUS_REMOTE_ROOT`。
+## Results
 
-## 输出
+All paths below are relative to `experiments_reproduction/experiment2/`:
 
-- `results/summary.csv`：四种组合的全局吞吐量、延迟和运行状态；
-- `results/run.py-summary-raw.txt`：`run.py` 的原始汇总行；
-- `results/<case>/`：对应组合的原始 stats；
-- `log/<case>/orchestrator.log`：控制端完整输出；
-- `log/<case>/remote/`：从所有远程服务器收集的 `out*` 日志。
+- `stats.txt`: computed throughput and latency rows for the four cases.
+- `exe/`: compiled executables and generated `params.h` files, grouped by build configuration.
+- `results/<case>/`: raw statistics preserved for each case.
+- `results/current/`: raw node statistics for the most recently executed case.
+- `log/current/`: client and remote-replica logs for the most recently executed case.
+- `log/<case>/orchestrator.log`: complete coordinator output for each case.
+- `log/<case>/remote/`: `out*` logs collected from the remote replicas.
+
+The script's final exit status is nonzero if any case fails. Check the corresponding `orchestrator.log` for error details.

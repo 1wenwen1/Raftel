@@ -38,6 +38,24 @@ servers
 clients
 ip_list
 
+# Per-experiment generated logs, outputs, results, and statistics
+experiments_reproduction/experiment[0-9]*/log/*
+experiments_reproduction/experiment[0-9]*/logs/*
+experiments_reproduction/experiment[0-9]*/out/*
+experiments_reproduction/experiment[0-9]*/output/*
+experiments_reproduction/experiment[0-9]*/outputs/*
+experiments_reproduction/experiment[0-9]*/result/*
+experiments_reproduction/experiment[0-9]*/results/*
+experiments_reproduction/experiment[0-9]*/stats/*
+!experiments_reproduction/experiment[0-9]*/log/.gitkeep
+!experiments_reproduction/experiment[0-9]*/logs/.gitkeep
+!experiments_reproduction/experiment[0-9]*/out/.gitkeep
+!experiments_reproduction/experiment[0-9]*/output/.gitkeep
+!experiments_reproduction/experiment[0-9]*/outputs/.gitkeep
+!experiments_reproduction/experiment[0-9]*/result/.gitkeep
+!experiments_reproduction/experiment[0-9]*/results/.gitkeep
+!experiments_reproduction/experiment[0-9]*/stats/.gitkeep
+
 # Local helper and recovery files
 task.json
 *_backup.*

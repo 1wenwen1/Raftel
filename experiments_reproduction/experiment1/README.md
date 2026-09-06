@@ -1,41 +1,50 @@
-# Experiment 1: WAN scalability
+# Experiment 1: WAN Scalability
 
-本实验在所有远程服务器的 `eth0` 上配置 `50ms` netem delay，然后运行以下组合：
+This experiment corresponds to Figure 3 in the paper. It adds a 50 ms `netem` delay to `eth0` on every remote host and evaluates WAN throughput and latency as the fault threshold increases.
 
-- 协议：`p0`、`p1`、`p2`、`p3`、`p4`
-- faults：`1`、`2`、`4`、`8`、`16`、`32`
-- 固定参数：`--batchsize 400 --payload 256`
+## Configuration
 
-共运行 30 组实验。脚本退出时会自动移除远程服务器上的 netem delay。
+- Protocols: HybridTEE (`p0`), Chained-HybridTEE (`p1`), Achilles (`p2`), Hotstuff (`p3`), and Basic-Damysus (`p4`)
+- Fault thresholds: `1`, `2`, `4`, `8`, `16`, and `32`
+- Fixed parameters: `--batchsize 400 --payload 256`
+- Repetitions: one run per protocol/fault-threshold combination
+- HybridTEE uses `totaltee = faults + 1`; the other protocols use their protocol-defined TEE populations
 
-## 运行
+The script runs 30 combinations. A run that produces zero throughput or zero latency is treated as failed. The remote `netem` configuration is removed when the script exits or is interrupted.
 
-从仓库任意位置执行：
+Before the full experiment starts, the script removes the previous contents of `exe/`, `log/`, `out/`, and `results/` (except `.gitkeep`) and clears `stats.txt`. Copy any results that you want to retain before rerunning it. Before each individual run, `run.py` also clears `results/current/` locally and `stats/` on every remote host so that measurements from different combinations are not mixed.
 
-```bash
-bash /root/Raftel/experiments_reproduction/experiment1/script/run_wan.sh
-```
+## Prerequisites
 
-运行前请确认：
+- `/root/Raftel/ip_list` must contain the remote host IP addresses.
+- `/root/Raftel/TShard` must be a valid SSH private key for the remote root user.
+- The remote project path must match `DAMYSUS_REMOTE_ROOT`; it defaults to `/root/Raftel`.
+- The remote root user must be allowed to configure `eth0` with `tc`.
 
-- `/root/Raftel/ip_list` 包含远程服务器 IP；
-- `/root/Raftel/TShard` 是可用的 SSH 私钥；
-- 远程项目目录与 `run.py` 使用的 `DAMYSUS_REMOTE_ROOT` 一致，默认是 `/root/Raftel`；
-- 远程服务器允许通过 `sudo tc` 设置 `eth0` 的网络延迟。
-
-如远程项目位于其他目录，可在运行前设置，例如：
+If the remote project uses another path, set it before starting the experiment:
 
 ```bash
 export DAMYSUS_REMOTE_ROOT=/root/another-directory
+```
+
+## Run
+
+Run the script from any directory:
+
+```bash
 bash /root/Raftel/experiments_reproduction/experiment1/script/run_wan.sh
 ```
 
-## 输出结构
+## Results
 
-- `results/summary.csv`：所有 30 组实验的全局吞吐量和延迟汇总；
-- `results/run.py-summary-raw.txt`：`run.py` 生成的原始汇总；
-- `results/<protocol>_f<faults>/`：每组实验下载的原始 stats；
-- `log/<protocol>_f<faults>/orchestrator.log`：该组实验的完整控制端输出；
-- `log/<protocol>_f<faults>/remote/`：该组实验所有远程副本的 `out*` 日志。
+All paths below are relative to `experiments_reproduction/experiment1/`:
 
-脚本会继续执行后续组合，并在 `summary.csv` 中标记失败的运行；只要有一组失败，脚本最终退出码就不是 0。
+- `stats.txt`: final computed throughput and latency rows for completed combinations.
+- `exe/`: compiled executables and generated `params.h` files, grouped by build configuration.
+- `results/<protocol>_f<faults>/`: raw statistics preserved for each combination.
+- `results/current/`: raw node statistics for the most recently executed combination.
+- `log/current/`: client and remote-replica logs for the most recently executed combination.
+- `log/<protocol>_f<faults>/orchestrator.log`: complete coordinator output for each combination.
+- `log/<protocol>_f<faults>/remote/`: `out*` logs collected from the remote replicas.
+
+The script continues after an individual failure. Check its console output and the corresponding `orchestrator.log` for the failed case; its final exit status is nonzero if any combination fails.
