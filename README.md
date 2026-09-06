@@ -299,6 +299,13 @@ View the results in:
 - `experiments_reproduction/experiment1/results/<protocol>_f<faults>/`: raw statistics for each run.
 - `experiments_reproduction/experiment1/log/<protocol>_f<faults>/`: orchestrator and remote-replica logs.
 
+Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
+
+```bash
+cd /root/Raftel
+python3 aliyun/delete_instances.py
+```
+
 **Experiment 2 — TEE leader and quorum combinations (Figure 4)**
 
 This LAN experiment evaluates Raftel under four combinations: a TEE or non-TEE leader, with or without enough TEE replicas to form a TEE quorum. Each set is evaluated with fault thresholds of 1, 2, 4, 8, 16, and 32, using a batch size of 400 and a 256-byte payload.
@@ -317,6 +324,13 @@ View the results in:
 - `experiments_reproduction/experiment2/results/set<1-4>_f<faults>/`: raw statistics for each combination.
 - `experiments_reproduction/experiment2/log/set<1-4>_f<faults>/`: orchestrator and remote-replica logs.
 
+Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
+
+```bash
+cd /root/Raftel
+python3 aliyun/delete_instances.py
+```
+
 **Experiment 3 — Redis end-to-end performance (Figure 6)**
 
 This experiment applies a 50 ms network delay and runs a Redis-backed, 100% SET workload with 1 KB values. It compares the end-to-end throughput and latency of the five protocols with `faults=8`, four clients, and three repetitions per protocol.
@@ -334,5 +348,12 @@ View the results in:
 - `experiments_reproduction/experiment3/exe/`: compiled executables and generated `params.h` files.
 - `experiments_reproduction/experiment3/results/raw/<protocol>_repeat<n>/`: raw statistics and client E2E measurements.
 - `experiments_reproduction/experiment3/log/<protocol>_repeat<n>/`: orchestrator and remote-replica logs.
+
+Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
+
+```bash
+cd /root/Raftel
+python3 aliyun/delete_instances.py
+```
 
 Each experiment directory also contains a dedicated `README.md` with its complete configuration and output layout.

@@ -57,3 +57,10 @@ All paths below are relative to `experiments_reproduction/experiment3/`:
 - `log/<protocol>_repeat<n>/remote/`: `out*` logs collected from the remote replicas.
 
 The script's final exit status is nonzero if any run fails. Check the corresponding `orchestrator.log` for error details.
+
+Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
+
+```bash
+cd /root/Raftel
+python3 aliyun/delete_instances.py
+```
