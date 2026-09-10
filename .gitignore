@@ -75,3 +75,6 @@ aliyun/*.key
 aliyun/*.pem
 TShard
 aliyun/config.json
+runs/*
+!runs/reference/
+!runs/reference/.gitkeep
