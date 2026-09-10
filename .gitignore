@@ -73,3 +73,5 @@ aliyun/*.txt
 aliyun/.env*
 aliyun/*.key
 aliyun/*.pem
+TShard
+aliyun/config.json

@@ -52,8 +52,11 @@ done
 # LAN baseline: remove any netem/root qdisc left by a previous WAN experiment.
 echo "Removing existing root qdisc on ${#remote_ips[@]} remote host(s)..."
 for ip in "${remote_ips[@]}"; do
+    # P0-4: SSH failures during qdisc cleanup must be fatal — a silent skip means
+    # lingering WAN delay contaminates this LAN experiment.
     ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-        "sudo tc qdisc del dev eth0 root 2>/dev/null || true"
+        "sudo tc qdisc del dev eth0 root 2>/dev/null || true" \
+        || { echo "ERROR: failed to remove qdisc on ${ip}" >&2; exit 1; }
 done
 
 : > "${STATS_FILE}"
@@ -83,7 +86,9 @@ run_one() {
 
     (
         cd "${REPO}"
+        # P0-2: cloud runs must use HW mode to reproduce paper's SGX hardware results
         python3 run.py --p0 \
+            --sgx-mode HW \
             --experiment-number 2 \
             --batchsize 400 \
             --payload 256 \
