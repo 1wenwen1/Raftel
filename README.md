@@ -1,6 +1,172 @@
 # Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World
 
-This repository contains the code accompanying the paper ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf), which was accepted to EuroSys 2027.
+Artifact for ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf), accepted at EuroSys 2027.
+
+---
+
+## Quick Start — Smoke Test (10 min, no cloud required)
+
+```bash
+# 1. Install the SGX SDK (SIM mode is enough for the smoke test)
+#    See "Dependencies" below for the full install path.
+
+# 2. Build Salticidae (one-time)
+git submodule update --init
+(cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)
+
+# 3. Check your environment
+./ae doctor --profile smoke
+
+# 4. Run a 4-node local smoke test
+./ae smoke
+```
+
+A successful run prints throughput and latency numbers and exits 0.
+
+---
+
+## Full Reproduction (cloud, 4–6 hours)
+
+> **Reviewer access:** Cluster credentials are provided separately via HotCRP.  
+> You do not need an Alibaba Cloud account.
+
+```bash
+# Step 1: Verify the cluster is ready
+./ae doctor --profile paper
+
+# Step 2: Run all three paper experiments
+./ae run all --scale full
+
+# Step 3: Generate figures and HTML report
+./ae report
+```
+
+Open `runs/<RUN_ID>/index.html` in a browser to see reproduced figures alongside
+the paper's claimed results, plus a checksums audit trail.
+
+For a faster trend check (~30 min, SIM mode, smaller scale):
+
+```bash
+./ae run all --scale mini
+./ae report
+```
+
+---
+
+## Figure-to-Script Mapping
+
+| Paper Figure | Experiment | Script | Expected output |
+|---|---|---|---|
+| Figure 3 | WAN scalability | `experiments_reproduction/experiment1/script/run_wan.sh` | `experiment1/stats.txt` |
+| Figure 4 | LAN leader/quorum | `experiments_reproduction/experiment2/script/run_lan.sh` | `experiment2/stats.txt` |
+| Figure 6 | Redis e2e (WAN) | `experiments_reproduction/experiment3/script/run_redis_wan.sh` | `experiment3/stats.txt` |
+
+All scripts accept the `AE_SCALE=mini` environment variable for a reduced-scale run.
+All scripts pass `--sgx-mode HW` to `run.py` for hardware enclave mode on cloud nodes.
+
+---
+
+## AE CLI Reference
+
+```
+./ae doctor [--profile paper|smoke]   # Check environment, flag blockers
+./ae smoke                            # Local 4-node SIM test (~5 min)
+./ae run <fig3|fig4|fig6|all> [--scale full|mini]
+./ae report [RUN_ID]                  # Generate figures + HTML report
+./ae status [RUN_ID]                  # Show run completion status
+./ae cloud <up|init|check|down> [--count N]   # Manage Aliyun cluster (author only)
+```
+
+Each `./ae run` invocation creates `runs/<RUN_ID>/` containing:
+- `manifest.json` — git commit, timestamp, parameters, cluster IPs
+- `events.jsonl` — timestamped log of every action
+- `checksums.txt` — SHA256 of all scripts and binaries at run time
+- `raw/` — untouched server and client logs (never deleted)
+- `figures/` — auto-generated PDFs
+- `index.html` — standalone HTML report
+
+---
+
+## Hardware Requirements
+
+- Ubuntu 20.04 x86-64
+- Intel SGX SDK 2.23.100.2 (`SGX_MODE=HW` for paper runs, `SIM` for local)
+- Cloud runs: Alibaba Cloud ECS instances with `/dev/sgx_enclave` + `/dev/sgx_provision`
+- Paper topology (§7.1): 1 replica per instance, 8 vCPU / 32 GB, 10 Gbps private network
+- Instance counts: Figure 3 needs up to 97 instances (f=32), Figure 4 up to 49, Figure 6 up to 25
+
+---
+
+## Dependencies
+
+```bash
+# System packages
+sudo apt-get install -y build-essential cmake git libssl-dev libuv1-dev pkg-config \
+    python3 python3-pip libhiredis-dev redis-server
+
+# Python packages
+pip3 install matplotlib paramiko scp aliyun-python-sdk-core
+
+# SGX SDK (SIM mode is enough for smoke tests)
+cd deployment/sourcefile
+tar -xzf archive.tar.gz
+printf 'no\n/opt/intel\n' | sudo ./sgx_linux_x64_sdk_2.23.100.2.bin
+source /opt/intel/sgxsdk/environment
+
+# SGX kernel support for HW mode (cloud nodes only)
+sudo bash deployment/sourcefile/SGX_init.sh
+# Reboot if prompted, then verify:
+ls /dev/sgx_enclave /dev/sgx_provision
+
+# Salticidae (submodule, one-time)
+git submodule update --init
+(cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)
+```
+
+---
+
+## Cluster Setup (author only)
+
+```bash
+# Create aliyun/config.json from aliyun/config.example.json, then:
+./ae cloud up --count 97     # provision instances
+./ae cloud init              # deploy code, install SGX/Redis on all nodes
+./ae cloud check             # verify all nodes are ready
+# ... run experiments ...
+./ae cloud down              # release instances after AE window
+```
+
+SSH key (`TShard`) is distributed to reviewers via HotCRP; it is not committed to this repo.
+
+---
+
+## Troubleshooting
+
+**`mkConfig` raises "N replicas requested but only M hosts"**  
+Run `./ae cloud up --count N` to provision the correct number of instances before running.
+
+**`make SGX_MODE=HW failed`**  
+Verify SGX SDK is sourced: `source /opt/intel/sgxsdk/environment` and `/dev/sgx_enclave` exists.
+
+**WAN netem setup fails on one node**  
+The script exits immediately — check SSH connectivity to that IP in `ip_list`.
+
+**Zero completions in experiment 3**  
+Check that Redis is running on all nodes (`./ae cloud check`) and that `--payload` matches `--kv-value-len` (the script sets both to consistent values automatically).
+
+---
+
+## Description
+
+Raftel is an SGX-TEE-assisted BFT protocol for partially trusted environments. It is built on the [Damysus](https://github.com/vrahli/damysus) codebase.
+
+- `App/Handler.cpp` — host-side consensus logic
+- `Enclave/EnclaveComb.cpp` — trusted operations for basic Raftel
+- `Enclave/EnclaveChComb.cpp` — trusted operations for Chained-Raftel
+- `App/params.h` — compile-time protocol selection (`BASIC_HYBRID_TEE`, `CHAINED_HYBRID_TEE`)
+- `run.py` — configuration generation, build, and experiment orchestration
+- `ae` — artifact evaluation CLI (this AE)
+
 
 ## Contents
 
