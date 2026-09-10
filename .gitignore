@@ -25,6 +25,7 @@ exe/
 deployment/sourcefile/archive.tar.gz
 
 # Experiment outputs and runtime files
+local_experiment/
 out/
 stats/
 stats.txt

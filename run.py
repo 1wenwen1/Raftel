@@ -1548,7 +1548,6 @@ def plot_live_throughput(
     fig.tight_layout()  # type: ignore[attr-defined]
     fig.savefig(out_png)  # type: ignore[attr-defined]
     plt.close(fig)
-    print("live curve written:", out_png, out_csv)
 
 
 # ---------------------------------------------------------------------------
