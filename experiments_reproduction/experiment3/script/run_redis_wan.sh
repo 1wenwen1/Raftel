@@ -23,11 +23,13 @@ requested_totaltee=9
 # P0-5: load sweep — run at multiple client counts to produce a throughput-latency curve.
 # Paper Figure 6 shows a curve, not a single point.
 load_sweep_clients=(1 2 4 8 16 32)
-# P0-1: fixed single payload/kv-value-len pair confirmed from paper §7.3.
-# KVAppCodec::encode requires key+value+14B header to fit in PAYLOAD_SIZE bytes.
-# We use payload=1024 (PAYLOAD_SIZE) with kv-value-len=256 to leave room for the key.
-payload_size=1024
-kv_value_length=256
+# AE FIX (§7.6): paper specifies "1 KB values" (kv-value-len=1024).
+# KVAppCodec::encode requires klen + vlen + 14 ≤ PAYLOAD_SIZE.
+# keyspace=10000 → key max 5 chars; 5+1024+14=1043, so PAYLOAD_SIZE must be ≥1043.
+# Original script used payload=256 which caused encode() to return false silently.
+# Correct values: payload=1100 (PAYLOAD_SIZE), kv-value-len=1024.
+payload_size=1100
+kv_value_length=1024
 views=30
 
 if [[ ! -f "${SSH_KEY}" ]]; then
@@ -86,6 +88,39 @@ done
 
 printf 'protocol,load_clients,repeat,e2e_throughput_ktps,e2e_latency_avg_ms,e2e_latency_p50_ms,e2e_latency_p95_ms,e2e_latency_p99_ms,num_completed,status\n' > "${PER_RUN_FILE}"
 
+# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
+# the result.  The warm-up is intentionally not configurable so that the paper
+# parameters remain the only thing that controls the measurement.
+warmup_one() {
+    local flag="$1"
+    local protocol="$2"
+    local num_clients="$3"
+
+    echo "[$(date --iso-8601=seconds)] WARMUP ${protocol}_cl${num_clients} (5 views, result discarded)"
+    (
+        cd "${REPO}"
+        python3 run.py "--${flag}" \
+            --sgx-mode HW \
+            --experiment-number 3 \
+            --batchsize 400 \
+            --payload "${payload_size}" \
+            --faults "${faults}" \
+            --totaltee "${requested_totaltee}" \
+            --views 5 \
+            --cl-num "${num_clients}" \
+            --cl-trans 200 \
+            --cl-sleep 0 \
+            --leader-mode fixed \
+            --leader-id 0 \
+            --redis \
+            --kv-set-ratio 100 \
+            --kv-get-ratio 0 \
+            --kv-del-ratio 0 \
+            --kv-keyspace 10000 \
+            --kv-value-len "${kv_value_length}"
+    ) >/dev/null 2>&1 || true   # warm-up failures are non-fatal
+}
+
 run_one() {
     local flag="$1"
     local protocol="$2"
@@ -97,12 +132,16 @@ run_one() {
     local rc metrics
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
+
+    # AE (§三): 5-view warm-up before the measured run
+    warmup_one "${flag}" "${protocol}" "${num_clients}"
+
     echo "[$(date --iso-8601=seconds)] START ${tag} (clients=${num_clients})"
 
     (
         cd "${REPO}"
         # P0-2: pass --sgx-mode HW for cloud paper runs
-        # P0-1: use consistent payload_size/kv_value_length pair (no encoding failure)
+        # AE FIX (§7.6): payload=1100, kv-value-len=1024 — see variable definitions above
         python3 run.py "--${flag}" \
             --sgx-mode HW \
             --experiment-number 3 \
