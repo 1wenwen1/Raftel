@@ -71,6 +71,36 @@ done
 
 : > "${STATS_FILE}"
 
+# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
+# the result.  The warm-up is intentionally not configurable so that the paper
+# parameters remain the only thing that controls the measurement.
+warmup_one() {
+    local flag="$1"
+    local protocol="$2"
+    local faults="$3"
+    local -a protocol_args=()
+
+    if [[ "${protocol}" == "Raftel-Worst" ]]; then
+        protocol_args=(--totaltee 0 --leader-mode fixed --leader-id "$((faults + 1))")
+    elif [[ "${flag}" == "p0" ]]; then
+        protocol_args=(--totaltee "$((faults + 1))")
+    fi
+
+    echo "[$(date --iso-8601=seconds)] WARMUP ${protocol}_f${faults} (5 views, result discarded)"
+    (
+        cd "${REPO}"
+        python3 run.py "--${flag}" \
+            --sgx-mode HW \
+            --experiment-number 1 \
+            --batchsize 400 \
+            --payload 256 \
+            --faults "${faults}" \
+            --repeats 1 \
+            --views 5 \
+            "${protocol_args[@]}"
+    ) >/dev/null 2>&1 || true   # warm-up failures are non-fatal
+}
+
 run_one() {
     local flag="$1"
     local protocol="$2"
@@ -94,6 +124,10 @@ run_one() {
     fi
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
+
+    # AE (§三): 5-view warm-up before the measured run
+    warmup_one "${flag}" "${protocol}" "${faults}"
+
     echo "[$(date --iso-8601=seconds)] START ${tag}"
 
     (
