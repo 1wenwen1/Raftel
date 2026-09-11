@@ -83,9 +83,12 @@ def _load_reference_ranges(fig: str) -> dict:
     if not csv_path.exists():
         return {}
     result = {}
-    with open(csv_path, newline="", encoding="utf-8") as f:
+    # Strip comment lines before feeding to DictReader
+    import io
+    raw_lines = [l for l in csv_path.read_text(encoding="utf-8").splitlines()
+                 if l.strip() and not l.strip().startswith("#")]
+    with io.StringIO("\n".join(raw_lines)) as f:
         for row in csv.DictReader(f):
-            # skip comment rows (lines starting with #)
             if not row:
                 continue
             try:
