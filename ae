@@ -392,6 +392,10 @@ def cmd_cloud(args) -> int:
                 "test -c /dev/sgx_enclave && echo sgx:ok || echo sgx:MISSING; "
                 "test -d /opt/intel/sgxsdk && echo sdk:ok || echo sdk:MISSING; "
                 "command -v redis-server >/dev/null && echo redis:ok || echo redis:MISSING; "
+                # AE (§六): hiredis is required for experiment3 Redis builds; check both
+                # the header (libhiredis-dev) and the shared library.
+                "pkg-config --exists hiredis 2>/dev/null && echo hiredis:ok || "
+                "  (test -f /usr/include/hiredis/hiredis.h && echo hiredis:ok || echo hiredis:MISSING); "
                 "test -f /usr/local/lib/libsalticidae.a && echo salticidae:ok || echo salticidae:MISSING"
             )
             result = subprocess.run(
