@@ -15,7 +15,10 @@ from cloud_common import load_config, ssh_key
 
 CONFIG = load_config()
 KEY = str(ssh_key(CONFIG))
-COMMON = ["-i", KEY, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
+# Replica public IPs are disposable and Alibaba may reuse them.  Do not let a
+# stale coordinator-wide known_hosts entry turn a fresh instance into an SSH
+# failure during an automated reviewer run.
+COMMON = ["-i", KEY, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes"]
 
 # AE FIX: ship the current evaluated files, including dirty changes; never keys/config.
 archive_temp = tempfile.NamedTemporaryFile(suffix=".tar.gz")

@@ -76,6 +76,8 @@ def ssh_is_ready(ip: str, user: str, key: Path, connect_timeout: int) -> bool:
         "-o",
         "UserKnownHostsFile=/dev/null",
         "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
         f"ConnectTimeout={connect_timeout}",
         f"{user}@{ip}",
         "true",

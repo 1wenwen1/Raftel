@@ -13,7 +13,7 @@ if [ -f "${REPO}/aliyun/config.json" ]; then
 fi
 key=${RAFTEL_SSH_KEY:-${key:-TShard}}
 [[ "$key" = /* ]] || key="${REPO}/${key}"
-ssh_options=(-i "$key" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5)
+ssh_options=(-i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5)
 
 echo "[$ip] Preparing the SGX kernel..."
 ssh "${ssh_options[@]}" "root@$ip" 'bash /root/SGX_init.sh'
