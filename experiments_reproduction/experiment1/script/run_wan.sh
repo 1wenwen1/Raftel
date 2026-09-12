@@ -16,7 +16,7 @@ STATS_FILE="${EXP_DIR}/stats.txt"
 
 protocol_flags=(p0 p1 p2 p3 p4 p0)
 protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus Raftel-Worst)
-fault_values=(1 2 4 8 16 32)
+read -r -a fault_values <<< "${AE_FAULT_VALUES:-1 2 4 8 16 32}"
 total_runs=$(( ${#protocol_flags[@]} * ${#fault_values[@]} ))
 
 if [[ ! -f "${SSH_KEY}" ]]; then
@@ -62,11 +62,44 @@ trap remove_wan_delay EXIT INT TERM
 
 echo "Configuring 50ms WAN delay on ${#remote_ips[@]} remote host(s)..."
 for ip in "${remote_ips[@]}"; do
+    # P0-4: WAN netem setup failures must be fatal — a silent skip means some
+    # node pairs have no delay, making the result invalid.
     ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-        "sudo tc qdisc del dev eth0 root 2>/dev/null || true; sudo tc qdisc add dev eth0 root netem delay 50ms"
+        "sudo tc qdisc del dev eth0 root 2>/dev/null || true; sudo tc qdisc add dev eth0 root netem delay 50ms" \
+        || { echo "ERROR: failed to configure netem on ${ip}" >&2; exit 1; }
 done
 
 : > "${STATS_FILE}"
+
+# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
+# the result.  The warm-up is intentionally not configurable so that the paper
+# parameters remain the only thing that controls the measurement.
+warmup_one() {
+    local flag="$1"
+    local protocol="$2"
+    local faults="$3"
+    local -a protocol_args=()
+
+    if [[ "${protocol}" == "Raftel-Worst" ]]; then
+        protocol_args=(--totaltee 0 --leader-mode fixed --leader-id "$((faults + 1))")
+    elif [[ "${flag}" == "p0" ]]; then
+        protocol_args=(--totaltee "$((faults + 1))")
+    fi
+
+    echo "[$(date --iso-8601=seconds)] WARMUP ${protocol}_f${faults} (5 views, result discarded)"
+    (
+        cd "${REPO}"
+        python3 run.py "--${flag}" \
+            --sgx-mode HW \
+            --experiment-number 1 \
+            --batchsize 400 \
+            --payload 256 \
+            --faults "${faults}" \
+            --repeats 1 \
+            --views 5 \
+            "${protocol_args[@]}"
+    )
+}
 
 run_one() {
     local flag="$1"
@@ -79,8 +112,10 @@ run_one() {
     local -a protocol_args=()
 
     if [[ "${protocol}" == "Raftel-Worst" ]]; then
+        # P0-6: paper §7.2 defines Raftel-Worst as m=0 (totaltee=0), not totaltee=f.
+        # Using totaltee=f with a fixed non-TEE leader is a different condition.
         protocol_args=(
-            --totaltee "${faults}"
+            --totaltee 0
             --leader-mode fixed
             --leader-id "$((faults + 1))"
         )
@@ -89,11 +124,21 @@ run_one() {
     fi
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
+
+    # AE (§三): 5-view warm-up before the measured run
+    if ! warmup_one "${flag}" "${protocol}" "${faults}" \
+        >"${run_log_dir}/warmup.log" 2>&1; then
+        echo "ERROR: warm-up failed for ${tag}; measurement skipped" >&2
+        return 1
+    fi
+
     echo "[$(date --iso-8601=seconds)] START ${tag}"
 
     (
         cd "${REPO}"
+        # P0-2: cloud runs must use HW mode to reproduce paper's SGX hardware results
         python3 run.py "--${flag}" \
+            --sgx-mode HW \
             --experiment-number 1 \
             --batchsize 400 \
             --payload 256 \

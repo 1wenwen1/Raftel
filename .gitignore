@@ -73,3 +73,11 @@ aliyun/*.txt
 aliyun/.env*
 aliyun/*.key
 aliyun/*.pem
+TShard
+aliyun/config.json
+runs/*
+!runs/reference/
+!runs/reference/.gitkeep
+experiments_reproduction/*/results/*.pdf
+experiments_reproduction/*/results/*.png
+experiments_reproduction/*/stats.txt

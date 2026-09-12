@@ -124,7 +124,7 @@ client_stats_file = RUN_OUTPUT_ROOT / "client_stats"
 
 # Experiment defaults. CLI arguments override the values exposed by main();
 # the remaining values are shared by helper functions below.
-sgxmode     = "SIM"
+sgxmode     = "SIM"   # overridden by --sgx-mode CLI flag in main()
 #sgxmode      = "HW"
 srcsgx       = "source /opt/intel/sgxsdk/environment" # this is where the sdk is supposed to be installed
 statsdir     = "stats"        # stats directory (don't change, hard coded in C++)
@@ -1716,14 +1716,25 @@ def makeInstance(protocol, debug, batchsize, payload, faults, totaltee, pct):
     # make (debug: server+client; else: sgxserver)
     if need_make:
         print("Starting make process...")
-        subprocess.call(["make","clean"])
+        # P0-7: check make return codes — a silent build failure would produce
+        # stale binaries and wrong results without any visible error.
+        rc = subprocess.call(["make", "clean"])
+        if rc != 0:
+            raise RuntimeError(f"make clean failed with exit code {rc}")
         if debug:
-            subprocess.call(["make","-j8","server","client"])
+            rc = subprocess.call(["make", "-j8", "server", "client"])
+            if rc != 0:
+                raise RuntimeError(f"make server client failed with exit code {rc}")
             for artifact in ("server", "client"):
                 shutil.copy2(PROJECT_ROOT / artifact, folder_path)
         else:
             subprocess.run(["bash -c \"" + srcsgx + "\""], shell=True, check=True)
-            subprocess.call(["make","-j",str(numMakeCores),"SGX_MODE="+sgxmode])
+            rc = subprocess.call(["make", "-j", str(numMakeCores), "SGX_MODE=" + sgxmode])
+            if rc != 0:
+                raise RuntimeError(
+                    f"make SGX_MODE={sgxmode} failed with exit code {rc}. "
+                    "Check that the SGX SDK is correctly installed and sourced."
+                )
             for artifact in ("sgxserver", "sgxclient", "sgxkeys"):
                 shutil.copy2(PROJECT_ROOT / artifact, folder_path)
         shutil.copy2(PROJECT_ROOT / "App" / "params.h", Path(folder_path) / "params.h")
@@ -3060,6 +3071,14 @@ def main():
         '"LABEL, server_vals_thr_mean, server_vals_lat_mean" (no Start/pro_dir lines). '
         'When unset: keep legacy stats.txt lines from experiment paths.',
     )
+    # P0-2: expose SGX mode as a CLI flag; cloud scripts pass --sgx-mode HW for paper runs
+    parser.add_argument(
+        '--sgx-mode',
+        choices=('SIM', 'HW'),
+        default=None,
+        dest='sgx_mode',
+        help='SGX build mode: SIM (simulation, default) or HW (hardware, required for cloud paper runs)',
+    )
     args = parser.parse_args()
 
     if getattr(args, "fault_cloud", False) and args.local:
@@ -3070,6 +3089,14 @@ def main():
         parser.error("--experiment-number must be at least 0")
     if args.repeats < 1:
         parser.error("--repeats must be at least 1")
+
+    # P0-2: apply --sgx-mode to the module-level variable consumed by makeInstance
+    global sgxmode
+    if args.sgx_mode is not None:
+        sgxmode = args.sgx_mode
+    elif args.local:
+        sgxmode = "SIM"   # local/smoke always SIM
+    # else: keep the module default (SIM) unless --sgx-mode HW is passed explicitly
 
     configure_output_paths(args.local, args.experiment_number)
 

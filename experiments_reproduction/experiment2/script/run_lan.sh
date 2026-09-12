@@ -15,7 +15,7 @@ IP_LIST_FILE="${REPO}/ip_list"
 STATS_FILE="${EXP_DIR}/stats.txt"
 
 sets=(set1 set2 set3 set4)
-fault_values=(1 2 4 8 16 32)
+read -r -a fault_values <<< "${AE_FAULT_VALUES:-1 2 4 8 16 32}"
 total_runs=$(( ${#sets[@]} * ${#fault_values[@]} ))
 
 if [[ ! -f "${SSH_KEY}" ]]; then
@@ -52,11 +52,39 @@ done
 # LAN baseline: remove any netem/root qdisc left by a previous WAN experiment.
 echo "Removing existing root qdisc on ${#remote_ips[@]} remote host(s)..."
 for ip in "${remote_ips[@]}"; do
+    # P0-4: SSH failures during qdisc cleanup must be fatal — a silent skip means
+    # lingering WAN delay contaminates this LAN experiment.
     ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-        "sudo tc qdisc del dev eth0 root 2>/dev/null || true"
+        "sudo tc qdisc del dev eth0 root 2>/dev/null || true" \
+        || { echo "ERROR: failed to remove qdisc on ${ip}" >&2; exit 1; }
 done
 
 : > "${STATS_FILE}"
+
+# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
+# the result.  The warm-up is intentionally not configurable so that the paper
+# parameters remain the only thing that controls the measurement.
+warmup_one() {
+    local set_name="$1"
+    local faults="$2"
+    local totaltee="$3"
+    local leader_id="$4"
+
+    echo "[$(date --iso-8601=seconds)] WARMUP ${set_name}_f${faults} (5 views, result discarded)"
+    (
+        cd "${REPO}"
+        python3 run.py --p0 \
+            --sgx-mode HW \
+            --experiment-number 2 \
+            --batchsize 400 \
+            --payload 256 \
+            --faults "${faults}" \
+            --totaltee "${totaltee}" \
+            --views 5 \
+            --leader-mode fixed \
+            --leader-id "${leader_id}"
+    )
+}
 
 run_one() {
     local set_name="$1"
@@ -79,11 +107,21 @@ run_one() {
     esac
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
+
+    # AE (§三): 5-view warm-up before the measured run
+    if ! warmup_one "${set_name}" "${faults}" "${totaltee}" "${leader_id}" \
+        >"${run_log_dir}/warmup.log" 2>&1; then
+        echo "ERROR: warm-up failed for ${label}; measurement skipped" >&2
+        return 1
+    fi
+
     echo "[$(date --iso-8601=seconds)] START ${label}: totaltee=${totaltee}, leader=${leader_id}"
 
     (
         cd "${REPO}"
+        # P0-2: cloud runs must use HW mode to reproduce paper's SGX hardware results
         python3 run.py --p0 \
+            --sgx-mode HW \
             --experiment-number 2 \
             --batchsize 400 \
             --payload 256 \

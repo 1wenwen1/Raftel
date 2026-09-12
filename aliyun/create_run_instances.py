@@ -1,4 +1,6 @@
+import argparse
 import json
+import sys
 from pathlib import Path
 from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.acs_exception.exceptions import ServerException
@@ -23,7 +25,7 @@ vpc_id = config["vpc_id"]
 vswitch_id = config["vswitch_id"]
 
 # Create an ECS instance function
-def create_ecs_instances():
+def create_ecs_instances(count=None):
     client = AcsClient(access_key_id, access_key_secret, region_id)
 
     request = CommonRequest()
@@ -48,21 +50,29 @@ def create_ecs_instances():
     request.add_query_param('SecurityOptions.TrustedSystemMode', 'vTPM')
     request.add_query_param('UniqueSuffix', 'true')  # Set an orderly instance name
     # request.add_query_param('AutoReleaseTime', '2024-06-01T12:00:00Z')  # Automatic release time
-    request.add_query_param('Amount', instance_count)  #  the number of instances
+    request.add_query_param('Amount', count if count is not None else instance_count)
 
     try:
         response = client.do_action_with_exception(request)
         print("Instances created successfully.")
         if response is None:
             print("Error: No response received from the server")
-            return
+            return 1
         instance_ids = json.loads(response.decode('utf-8'))["InstanceIdSets"]["InstanceIdSet"]
         # Save the instance ID to the file
         with (ALIYUN_DIR / "instances.txt").open("a") as f:
             for instance_id in instance_ids:
                 f.write(f"{instance_id}\n")
     except ServerException as e:
-        print(f"Error creating instances: {e}")
+        print(f"Error creating instances: {e}", file=sys.stderr)
+        return 1
+    return 0
 
-# Create an instance
-create_ecs_instances()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Create Raftel ECS instances")
+    parser.add_argument("--count", type=int, default=None,
+                        help="override instance_count from config.json")
+    args = parser.parse_args()
+    if args.count is not None and args.count < 1:
+        parser.error("--count must be at least 1")
+    sys.exit(create_ecs_instances(args.count))
