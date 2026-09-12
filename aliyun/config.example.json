@@ -1,6 +1,6 @@
 {
   "_comment": "Raftel AE — Alibaba Cloud ECS configuration template. Copy to config.json and fill in your account details.",
-  "_paper_spec": "Paper §7.1: 8 vCPU / 32 GB RAM / 10 Gbps private network, 1 replica per instance, Ubuntu 20.04 x86-64, Intel SGX hardware enclave required.",
+  "_deployment_layout": "The AE workflow uses 7 reusable hosts and starts up to 15 replicas per host on distinct ports (105 replicas total). Co-located results are not equivalent to one-replica-per-host measurements.",
   "region_id": "YOUR_REGION_ID",
   "_region_note": "e.g. cn-hangzhou or cn-shanghai. All instances must be in the same region/VPC for 10 Gbps private networking.",
   "access_key_id": "YOUR_ACCESS_KEY_ID",
@@ -8,7 +8,7 @@
   "instance_type": "ecs.g7t.2xlarge",
   "_instance_type_note": "SGX-capable, 8 vCPU / 32 GB. g7t series supports Intel SGX2 (TDX vTPM). Verify availability in your region: https://www.alibabacloud.com/help/doc-detail/108490.htm. Alternative with SGX1: ecs.c7t.2xlarge (8 vCPU / 16 GB, check if memory is sufficient).",
   "instance_count": 7,
-  "_instance_count_note": "Default 7 for quick/smoke runs. For full paper-scale reproduction: fig3 needs up to 97 (f=32, 3f+1 replicas), fig4 up to 49 (f=16), fig6 needs 25 (f=8). Use ./ae cloud up --count N to override at runtime.",
+  "_instance_count_note": "Keep this at 7 for the reusable-host workflow. The 15 replicas-per-host limit supports up to 105 replicas, covering faults=32 for 3f+1 protocols.",
   "image_id": "YOUR_IMAGE_ID",
   "_image_note": "Ubuntu 20.04 LTS x86-64. Find the latest image ID for your region: aliyun ecs DescribeImages --RegionId YOUR_REGION --OSType linux --Architecture x86_64 | grep ubuntu_20",
   "security_group_id": "YOUR_SECURITY_GROUP_ID",
