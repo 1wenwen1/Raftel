@@ -13,7 +13,7 @@ understand what changed relative to the upstream
 Raftel/
 ├── App/            Host-side C++ (untrusted, compiled with SGX SDK)
 ├── Enclave/        Trusted C++ (compiled into the SGX enclave)
-├── Makefile        Top-level build; SGX_MODE=HW for paper runs
+├── Makefile        Top-level build; SGX_MODE=SIM by default
 ├── run.py          Experiment orchestrator (build, configure, launch, collect)
 ├── ae              AE CLI entry point
 ├── aliyun/         Alibaba Cloud instance lifecycle scripts
@@ -135,9 +135,9 @@ values are `--payload 1100 --kv-value-len 1024`.
 
 ## SGX Simulation vs. Hardware Mode
 
-`Makefile` accepts `SGX_MODE=SIM` (default for local smoke tests) or
-`SGX_MODE=HW` (required for paper runs on SGX-capable cloud nodes).  The
-experiment scripts pass `--sgx-mode HW` to `run.py`, which sets
-`SGX_MODE=HW` in the make invocation and raises an error if make fails.
+`Makefile` accepts `SGX_MODE=SIM` or `SGX_MODE=HW`. All local and cloud
+experiment scripts pass `--sgx-mode SIM` to `run.py`; hardware mode remains an
+explicit opt-in for manual runs. `run.py` forwards the selected mode to the
+make invocation and raises an error if the build fails.
 
-Local `./ae smoke` always uses SIM mode; `./ae run` passes HW mode.
+Both `./ae smoke` and `./ae run` use SIM mode by default.

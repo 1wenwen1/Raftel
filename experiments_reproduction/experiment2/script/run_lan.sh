@@ -74,7 +74,7 @@ warmup_one() {
     (
         cd "${REPO}"
         python3 run.py --p0 \
-            --sgx-mode HW \
+            --sgx-mode SIM \
             --experiment-number 2 \
             --batchsize 400 \
             --payload 256 \
@@ -119,9 +119,9 @@ run_one() {
 
     (
         cd "${REPO}"
-        # P0-2: cloud runs must use HW mode to reproduce paper's SGX hardware results
+        # Cloud experiments use SGX simulation mode by default.
         python3 run.py --p0 \
-            --sgx-mode HW \
+            --sgx-mode SIM \
             --experiment-number 2 \
             --batchsize 400 \
             --payload 256 \

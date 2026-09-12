@@ -6,7 +6,7 @@
   "access_key_id": "YOUR_ACCESS_KEY_ID",
   "access_key_secret": "YOUR_ACCESS_KEY_SECRET",
   "instance_type": "ecs.g7t.2xlarge",
-  "_instance_type_note": "SGX-capable, 8 vCPU / 32 GB. g7t series supports Intel SGX2 (TDX vTPM). Verify availability in your region: https://www.alibabacloud.com/help/doc-detail/108490.htm. Alternative with SGX1: ecs.c7t.2xlarge (8 vCPU / 16 GB, check if memory is sufficient).",
+  "_instance_type_note": "8 vCPU / 32 GB default. Experiments use SGX_MODE=SIM, so SGX hardware is not required; keep all 7 hosts on the same instance type for comparable results.",
   "instance_count": 7,
   "_instance_count_note": "Keep this at 7 for the reusable-host workflow. The 15 replicas-per-host limit supports up to 105 replicas, covering faults=32 for 3f+1 protocols.",
   "image_id": "YOUR_IMAGE_ID",

@@ -3079,7 +3079,7 @@ def main():
         '"LABEL, server_vals_thr_mean, server_vals_lat_mean" (no Start/pro_dir lines). '
         'When unset: keep legacy stats.txt lines from experiment paths.',
     )
-    # P0-2: expose SGX mode as a CLI flag; cloud scripts pass --sgx-mode HW for paper runs
+    # Expose SGX mode as a CLI flag; all experiment scripts default to SIM.
     parser.add_argument(
         '--sgx-mode',
         choices=('SIM', 'HW'),

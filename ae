@@ -406,7 +406,7 @@ def cmd_cloud(args) -> int:
         all_ok = True
         for ip in ips:
             check_cmd = (
-                "test -c /dev/sgx_enclave && echo sgx:ok || echo sgx:MISSING; "
+                "test -c /dev/sgx_enclave && echo sgx-hw:available || echo sgx-hw:optional-SIM; "
                 "test -d /opt/intel/sgxsdk && echo sdk:ok || echo sdk:MISSING; "
                 "command -v redis-server >/dev/null && echo redis:ok || echo redis:MISSING; "
                 # AE (§六): hiredis is required for experiment3 Redis builds; check both

@@ -458,7 +458,7 @@ def _config_table(fig_id: str) -> str:
             ("Batch size", "400 tx/block"),
             ("Payload", "256 B"),
             ("Network", "WAN — 50 ms one-way netem (100 ms RTT)"),
-            ("SGX mode", "HW"),
+            ("SGX mode", "SIM"),
             ("Raftel totaltee", "f+1 (Raftel-Best); 0 for Raftel-Worst (§7.2)"),
             ("Warm-up", "5 views per config point, result discarded"),
         ],
@@ -468,7 +468,7 @@ def _config_table(fig_id: str) -> str:
             ("Batch size", "400 tx/block"),
             ("Payload", "256 B"),
             ("Network", "LAN — no WAN delay"),
-            ("SGX mode", "HW"),
+            ("SGX mode", "SIM"),
             ("Warm-up", "5 views per config point, result discarded"),
         ],
         "fig6": [
@@ -481,7 +481,7 @@ def _config_table(fig_id: str) -> str:
             ("Client sweep", "1, 2, 4, 8, 16, 32 clients"),
             ("Repeats", "3 per (protocol, clients)"),
             ("Network", "WAN — 50 ms one-way netem (100 ms RTT)"),
-            ("SGX mode", "HW"),
+            ("SGX mode", "SIM"),
             ("Warm-up", "5 views per (protocol, clients) point, result discarded"),
         ],
     }

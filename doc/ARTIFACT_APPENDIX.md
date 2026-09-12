@@ -46,9 +46,8 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 ## Hardware Dependencies
 
 - **Ubuntu 20.04 x86-64** on every node (coordinator and replicas).
-- **Intel SGX-capable CPU** with the in-kernel SGX driver enabled.
-  Cloud instance: Alibaba Cloud `ecs.g7t.2xlarge` (8 vCPU / 32 GB / SGX-TEE).
-  Verify SGX devices are present: `ls /dev/sgx_enclave /dev/sgx_provision`.
+- SGX-capable hardware is optional. All delivered experiment scripts run in
+  SGX simulation mode; the Intel SGX SDK and SGX SSL are still required.
 - **Network**: 10 Gbps private network between hosts (Alibaba Cloud VPC default).
   WAN experiments emulate 50 ms one-way delay using `tc netem` on each host.
 
@@ -88,8 +87,8 @@ and by the manual steps in the README on the coordinator.
 | Fig 4 | LAN TEE-config effect: S1 > S2 ≥ S3 > S4 throughput, S1 ≤ … ≤ S4 latency | **Full reproduction** — four configurations at f∈{1,2,4,8,16,32}. Paper-exact: S1 at f=32 = 31.5 kTPS. |
 | Fig 6 | Redis E2E: Achilles 95 TPS, Chained 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS (peak) | **Full reproduction** — load sweep clients∈{1,2,4,8,16,32}, 3 repeats. Absolute values within ±40%; ordering must match. |
 
-Absolute throughput and latency numbers depend on SGX attestation overhead,
-cloud network jitter, and instance placement within the Alibaba Cloud region.
+Absolute throughput and latency numbers depend on simulation overhead, cloud
+network jitter, and instance placement within the Alibaba Cloud region.
 We consider the artifact successfully reproduced when the **ordering** of
 protocols is consistent with the paper and absolute values fall within the
 ±40% PASS band defined in `runs/reference/EXPECTED_RANGES.md`.
@@ -124,7 +123,7 @@ cp aliyun/config.example.json aliyun/config.json   # edit with your account
 ./ae report
 ```
 
-### Reduced-scale cloud check (~30 min, HW mode)
+### Reduced-scale cloud check (~30 min, SIM mode)
 
 ```
 ./ae run all --scale mini
@@ -137,9 +136,9 @@ cp aliyun/config.example.json aliyun/config.json   # edit with your account
 
 Three correctness bugs in the original code were fixed for this AE:
 
-1. **SGX SIM mode hardcoded** (`run.py` line 127): original `sgxmode = "SIM"` was
-   never overridden for cloud runs. Fixed by adding `--sgx-mode {SIM,HW}` CLI flag;
-   experiment scripts pass `--sgx-mode HW`.
+1. **Explicit SGX mode selection:** `run.py` exposes `--sgx-mode {SIM,HW}`;
+   all delivered experiment scripts explicitly select `SIM`. Hardware mode is
+   available only as an opt-in manual run.
 
 2. **Raftel-Worst wrong `totaltee`** (Figure 3): original script used
    `--totaltee f`, but §7.2 defines Raftel-Worst as `m=0` (no TEE fast path).

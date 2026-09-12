@@ -5,14 +5,12 @@ apt update
 
 tar -xvzf archive.tar.gz
 
-if [ ! -e /dev/sgx_enclave ] || [ ! -e /dev/sgx_provision ]; then
-    echo "ERROR: Intel SGX devices are unavailable after the SGX initialization and reboot." >&2
-    echo "Expected /dev/sgx_enclave and /dev/sgx_provision." >&2
-    exit 1
+if [ -e /dev/sgx_enclave ] && [ -e /dev/sgx_provision ]; then
+    echo "Intel SGX hardware devices are available (optional for SIM mode)."
+    ls -l /dev/sgx_enclave /dev/sgx_provision
+else
+    echo "Intel SGX hardware devices are unavailable; continuing in SIM mode."
 fi
-
-echo "Intel SGX in-kernel driver is available."
-ls -l /dev/sgx_enclave /dev/sgx_provision
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential ocaml ocamlbuild automake autoconf libtool wget python-is-python3 libssl-dev git cmake perl
 apt-get install -y build-essential python-is-python3

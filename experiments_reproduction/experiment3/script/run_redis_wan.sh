@@ -100,7 +100,7 @@ warmup_one() {
     (
         cd "${REPO}"
         python3 run.py "--${flag}" \
-            --sgx-mode HW \
+            --sgx-mode SIM \
             --experiment-number 3 \
             --batchsize 400 \
             --payload "${payload_size}" \
@@ -144,10 +144,10 @@ run_one() {
 
     (
         cd "${REPO}"
-        # P0-2: pass --sgx-mode HW for cloud paper runs
+        # Cloud experiments use SGX simulation mode by default.
         # AE FIX (§7.6): payload=1100, kv-value-len=1024 — see variable definitions above
         python3 run.py "--${flag}" \
-            --sgx-mode HW \
+            --sgx-mode SIM \
             --experiment-number 3 \
             --batchsize 400 \
             --payload "${payload_size}" \

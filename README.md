@@ -24,9 +24,9 @@ See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appe
 
 ## Prerequisites
 
-> **⚠ SGX HARDWARE REQUIRED for paper runs.**
-> Every cloud node must be an Intel SGX-capable instance with `/dev/sgx_enclave` and `/dev/sgx_provision` present. The paper uses Alibaba Cloud `ecs.g7t.2xlarge` (8 vCPU / 32 GB, SGX-TEE enabled).
-> A local smoke test (SIM mode) works without SGX hardware.
+> **SGX mode:** all local and cloud experiment scripts use `SGX_MODE=SIM` by
+> default. The SGX SDK and SGX SSL are still required to compile simulation-mode
+> enclaves, but SGX hardware devices are not used by the experiments.
 
 - Ubuntu 20.04 x86-64 on coordinator and all replica nodes
 - Intel SGX SDK 2.23.100.2 (bundled in `deployment/sourcefile/archive.tar.gz`)
@@ -70,8 +70,14 @@ tmux list-sessions
 ./ae cloud check
 ./ae doctor --profile paper
 
-# 6. Run all three cloud experiments (~4–6 h)
+# 6. Run all three experiments (~6–8 h)
 ./ae run all
+
+# Alternatively, run an individual experiment and then generate its report
+./ae run fig3   # Experiment 1 / Figure 3(~ 3 h)
+./ae run fig4   # Experiment 2 / Figure 4(~ 2 h)
+./ae run fig6   # Experiment 3 / Figure 6(~ 2 h)
+./ae report
 
 # 7. Generate figures and the HTML report for the latest run
 ./ae report
@@ -101,21 +107,27 @@ Required: an Alibaba Cloud account with ECS access, a VPC/vSwitch in the same re
 # 1. Fill in your credentials and resource IDs
 cp aliyun/config.example.json aliyun/config.json
 $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
-                              # image_id (Ubuntu 20.04 SGX), security_group_id,
+                              # image_id (Ubuntu 20.04), security_group_id,
                               # vswitch_id, key_pair_name; instance_type is fixed
                               # at ecs.g7t.2xlarge — do not change it
 
 # 2. Provision the 7 reusable hosts
 ./ae cloud up --count 7
 
-# 3. Deploy code and initialize SGX on all nodes (~20 min)
+# 3. Deploy code and initialize the experiment environment (~20 min)
 ./ae cloud init
 
-# 4. Verify all dependencies are ready on every node
+# 4. Verify all dependencies are ready on every node (~2 min)
 ./ae cloud check
 
-# 5. Run experiments and generate report
+# 5. Run all experiments and generate the report (~7 h)
 ./ae run all
+./ae report
+
+# Alternatively, run an individual experiment and then generate its report
+./ae run fig3   # Experiment 1 / Figure 3(~ 3 h)
+./ae run fig4   # Experiment 2 / Figure 4(~ 2 h)
+./ae run fig6   # Experiment 3 / Figure 6(~ 2 h)
 ./ae report
 
 # 6. Release instances when done
@@ -150,7 +162,7 @@ Reference values are in `runs/reference/fig{3,4,6}.csv`; PASS/WARN/FAIL criteria
 | Figure 4 | LAN TEE configs | `experiments_reproduction/experiment2/script/run_lan.sh` | `experiment2/stats.txt` |
 | Figure 6 | Redis E2E WAN | `experiments_reproduction/experiment3/script/run_redis_wan.sh` | `experiment3/stats.txt` |
 
-The Figure 3/4 scripts accept `AE_FAULT_VALUES`; the Figure 6 script accepts `AE_LOAD_CLIENTS` and `AE_REPEATS`. The AE CLI sets these variables for `--scale mini`. Scripts pass `--sgx-mode HW` to `run.py` for all cloud runs.
+The Figure 3/4 scripts accept `AE_FAULT_VALUES`; the Figure 6 script accepts `AE_LOAD_CLIENTS` and `AE_REPEATS`. The AE CLI sets these variables for `--scale mini`. All experiment scripts pass `--sgx-mode SIM` to `run.py`.
 
 ---
 
@@ -206,9 +218,7 @@ cd deployment/sourcefile && tar -xzf archive.tar.gz
 printf 'no\n/opt/intel\n' | sudo ./sgx_linux_x64_sdk_2.23.100.2.bin
 source /opt/intel/sgxsdk/environment
 
-# SGX kernel driver for HW mode (cloud nodes)
-sudo bash deployment/sourcefile/SGX_init.sh   # reboot if prompted
-ls /dev/sgx_enclave /dev/sgx_provision        # verify
+# SGX hardware mode is optional and is not used by the default experiments.
 
 # Salticidae submodule (coordinator)
 git submodule update --init
@@ -224,8 +234,9 @@ Seven hosts support at most 105 replicas (`15` per host). Check that
 `aliyun/priv_ip.txt` contains all 7 hosts and keep the configured fault range at
 or below `faults=32` for `3f+1` protocols.
 
-**`make SGX_MODE=HW failed`**
-Verify the SGX SDK is sourced (`source /opt/intel/sgxsdk/environment`) and that `/dev/sgx_enclave` exists on the build node.
+**`make SGX_MODE=SIM failed`**
+Verify that the SGX SDK is installed and sourced with
+`source /opt/intel/sgxsdk/environment`. SGX hardware devices are not required.
 
 **WAN netem setup fails on one node**
 The script exits immediately. Check SSH connectivity (`ssh -i TShard root@<IP>`) and verify that the node is listed in `ip_list`.
@@ -235,6 +246,3 @@ Run `ssh -i TShard root@<IP> 'apt-get install -y libhiredis-dev'` on the affecte
 
 **Zero completions in experiment 3**
 Verify Redis is running on all nodes (`./ae cloud check` shows `redis:ok`) and that `ip_list` has at least 25 entries. The experiment scripts set `--payload 1100 --kv-value-len 1024` automatically; no manual adjustment is needed.
-
-**SGX devices missing after reboot**
-Re-run `sudo bash deployment/sourcefile/SGX_init.sh` on the affected node. On some kernels the in-kernel SGX driver requires a second boot after installing the HWE kernel.

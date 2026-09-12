@@ -47,7 +47,6 @@ def create_ecs_instances(count=None):
     request.add_query_param('VSwitchId', vswitch_id)
     request.add_query_param('InstanceChargeType', 'PostPaid')  # Pay by volume
     request.add_query_param('KeyPairName', key_pair_name)  # Set the key pair
-    request.add_query_param('SecurityOptions.TrustedSystemMode', 'vTPM')
     request.add_query_param('UniqueSuffix', 'true')  # Set an orderly instance name
     # request.add_query_param('AutoReleaseTime', '2024-06-01T12:00:00Z')  # Automatic release time
     request.add_query_param('Amount', count if count is not None else instance_count)
