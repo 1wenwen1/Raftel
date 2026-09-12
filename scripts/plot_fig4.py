@@ -113,8 +113,9 @@ def plot_fig4(stats_file: Path, out_pdf: Path) -> None:
 
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_pdf, dpi=150, bbox_inches="tight")
+    fig.savefig(out_pdf.with_suffix(".png"), dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved: {out_pdf}")
+    print(f"Saved: {out_pdf} and {out_pdf.with_suffix('.png')}")
 
 
 def main():

@@ -1603,6 +1603,14 @@ def mkConfig(n, totaltee):
 
     # Read IP list
     host_ips = read_ip_list(str(raw_ip_list))
+    if not host_ips:
+        raise RuntimeError(f"mkConfig: no hosts found in {raw_ip_list}")
+    capacity = len(host_ips) * numInstance
+    if n > capacity:
+        raise RuntimeError(
+            f"mkConfig: {n} replicas requested, but {len(host_ips)} hosts with "
+            f"{numInstance} replicas per host can run at most {capacity}"
+        )
 
     # Generate server configuration
     server_lines, used_ips = generate_servers(host_ips, n, numInstance)

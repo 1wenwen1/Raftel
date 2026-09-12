@@ -35,7 +35,11 @@ See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appe
 - hiredis + Redis (for experiment 3): `sudo apt-get install -y libhiredis-dev redis-server`
 - SSH private key `TShard` at `/root/Raftel/TShard` (reviewers: distributed via HotCRP)
 
-Instance counts needed for one replica per host: Figure 3 up to 97 (f=32), Figure 4 up to 97 (f=32), Figure 6 exactly 25 (f=8).
+The cloud workflow provisions 7 hosts and reuses them for all experiments. `run.py`
+can start up to 15 replicas per host on distinct ports, giving a total capacity of
+105 replicas. This covers the largest configured case (`faults=32`, `3f+1=97`).
+Because replicas share hosts, these measurements include same-host CPU, memory,
+network, and SGX contention and are not equivalent to a one-replica-per-host setup.
 
 ---
 
@@ -77,8 +81,8 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
                               # vswitch_id, key_pair_name; instance_type is fixed
                               # at ecs.g7t.2xlarge — do not change it
 
-# 2. Provision instances (97 for Fig 3; scale down for a mini run)
-./ae cloud up --count 97
+# 2. Provision the 7 reusable hosts
+./ae cloud up --count 7
 
 # 3. Deploy code and initialize SGX on all nodes (~20 min)
 ./ae cloud init
@@ -141,8 +145,25 @@ Each `./ae run` creates `runs/<RUN_ID>/` with:
 - `manifest.json` — git commit, timestamp, cluster IPs, scale
 - `events.jsonl` — timestamped event log
 - `checksums.txt` — SHA256 of all scripts and `run.py`
+- `stats/fig3.txt`, `stats/fig4.txt`, `stats/fig6.txt` — snapshots of that run's statistics
 - `figures/` — auto-generated PDFs
 - `index.html` — standalone HTML report with reference comparisons and ordering checks
+
+After a cloud run, generate and inspect Figure 3/4 with:
+
+```bash
+./ae status                              # show the latest run ID and status
+./ae report                              # report for the latest run
+# or regenerate a specific historical run without mixing newer statistics:
+./ae report <RUN_ID>
+ls runs/<RUN_ID>/figures/fig{3,4}.pdf
+```
+
+Open `runs/<RUN_ID>/index.html` in a browser for the combined report. The source
+numerical rows remain available in `runs/<RUN_ID>/stats/fig3.txt` and
+`runs/<RUN_ID>/stats/fig4.txt`. The experiment directories also contain the
+latest working copies and raw data under `experiments_reproduction/experiment1/`
+and `experiments_reproduction/experiment2/`.
 
 ---
 
@@ -174,8 +195,10 @@ git submodule update --init
 
 ## Troubleshooting
 
-**`mkConfig` raises "N replicas requested but only M hosts"**
-Run `./ae cloud up --count N` to provision the correct number of instances, then `./ae cloud init` and `./ae cloud check` before retrying.
+**The requested replicas exceed the configured host capacity**
+Seven hosts support at most 105 replicas (`15` per host). Check that
+`aliyun/priv_ip.txt` contains all 7 hosts and keep the configured fault range at
+or below `faults=32` for `3f+1` protocols.
 
 **`make SGX_MODE=HW failed`**
 Verify the SGX SDK is sourced (`source /opt/intel/sgxsdk/environment`) and that `/dev/sgx_enclave` exists on the build node.

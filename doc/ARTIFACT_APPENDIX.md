@@ -49,13 +49,14 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 - **Intel SGX-capable CPU** with the in-kernel SGX driver enabled.
   Cloud instance: Alibaba Cloud `ecs.g7t.2xlarge` (8 vCPU / 32 GB / SGX-TEE).
   Verify SGX devices are present: `ls /dev/sgx_enclave /dev/sgx_provision`.
-- **Network**: 10 Gbps private network between nodes (Alibaba Cloud VPC default).
-  WAN experiments emulate 50 ms one-way delay using `tc netem` on each node.
+- **Network**: 10 Gbps private network between hosts (Alibaba Cloud VPC default).
+  WAN experiments emulate 50 ms one-way delay using `tc netem` on each host.
 
-Maximum instance counts by figure:
-- Figure 3: up to 97 instances (f=32, 3×32+1 replicas).
-- Figure 4: up to 97 instances (f=32).
-- Figure 6: 25 instances (n = 3×8+1).
+The cloud workflow uses 7 reusable hosts. `run.py` assigns up to 15 replicas to
+each host using distinct ports, for a total capacity of 105 replicas. Figure 3
+and Figure 4 need at most 97 replicas (`f=32`, `3f+1`), while Figure 6 needs 25.
+This co-located layout is operationally convenient but is not equivalent to
+one replica per physical host; results include same-host resource contention.
 
 ---
 
@@ -114,7 +115,7 @@ Open `runs/<RUN_ID>/index.html` for reproduced figures, reference comparisons, a
 cp aliyun/config.example.json aliyun/config.json   # edit with your account
 
 # 2. Provision and initialise nodes
-./ae cloud up --count 97
+./ae cloud up --count 7
 ./ae cloud init
 ./ae cloud check
 
