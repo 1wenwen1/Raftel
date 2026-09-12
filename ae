@@ -2,17 +2,20 @@
 """Raftel Artifact Evaluation CLI.
 
 Usage:
-  ./ae doctor [--profile paper|smoke]
-  ./ae smoke
-  ./ae run <fig3|fig4|fig6|all> [--scale full|mini]
+  ./ae doctor
+  ./ae run <fig3|fig4|fig6|all> [--mode sim|full]
   ./ae report [RUN_ID]
   ./ae status [RUN_ID]
-  ./ae cloud <up|init|check|down> [--count N]
+  ./ae cloud check
 """
+
+from __future__ import annotations
 
 import argparse
 import datetime
 import hashlib
+import fcntl
+from types import SimpleNamespace
 import json
 import os
 import shutil
@@ -29,28 +32,36 @@ SCRIPTS = {
     "fig4": REPO / "experiments_reproduction" / "experiment2" / "script" / "run_lan.sh",
     "fig6": REPO / "experiments_reproduction" / "experiment3" / "script" / "run_redis_wan.sh",
 }
-PLOT_SCRIPTS = {
-    "fig3": REPO / "scripts" / "plot_fig3.py",
-    "fig4": REPO / "scripts" / "plot_fig4.py",
-    "fig6": REPO / "scripts" / "plot_fig6.py",
-}
 REPORT_SCRIPT = REPO / "scripts" / "gen_report.py"
 
-# Mini-scale overrides: reduced fault values for quick smoke/trend check
-MINI_SCALE_ENV = {
-    "AE_SCALE": "mini",
-    "AE_FAULT_VALUES": "1 2 4",        # subset of the full f sweep
-    "AE_LOAD_CLIENTS": "1 4 16",       # subset of Fig6 load sweep
+# Simulation is the original cost-saving topology: seven physical hosts carry
+# up to fifteen logical replicas each (105 total), which covers n=97 at f=32.
+# It runs the complete sweep in SGX SIM mode and cannot support hardware claims.
+SIMULATION_SCALE_ENV = {
+    "AE_SCALE": "simulation",
+    "AE_SGX_MODE": "SIM",
+    "AE_FAULT_VALUES": "1 2 4 8 16 32",
+    "AE_LOAD_CLIENTS": "1 2 4 8 16 32",
+    "AE_REDIS_FAULTS": "8",
     "AE_REPEATS": "1",
+    "AE_ALLOW_MULTIPLEXING": "1",
+    # Match the original runner's orchestration window. Simulation validates an
+    # explicit protocol quorum rather than waiting for every multiplexed
+    # process to exit.
+    "AE_TIMEOUT_SEC": "240",
 }
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def run_id_new() -> str:
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    override = os.environ.get("AE_RUN_ID_OVERRIDE")
+    if override:
+        if not all(c.isalnum() or c in ".-_" for c in override):
+            raise ValueError("Invalid AE_RUN_ID_OVERRIDE")
+        return override
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     return ts
 
 
@@ -62,7 +73,7 @@ def latest_run_id() -> str | None:
     if not RUNS_DIR.exists():
         return None
     runs = sorted(
-        (d.name for d in RUNS_DIR.iterdir() if d.is_dir()),
+        (d.name for d in RUNS_DIR.iterdir() if d.is_dir() and (d / "manifest.json").is_file()),
         reverse=True,
     )
     return runs[0] if runs else None
@@ -93,6 +104,20 @@ def update_manifest(run_dir: Path, updates: dict) -> None:
         json.dump(manifest, f, indent=2)
 
 
+def archive_experiment_outputs(rd: Path, fig: str) -> None:
+    """Copy the current experiment tree into the run, including partial runs."""
+    exp = {"fig3": "experiment1", "fig4": "experiment2", "fig6": "experiment3"}[fig]
+    source = REPO / "experiments_reproduction" / exp
+    target = rd / "raw" / exp
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("stats.txt", "log", "results"):
+        src = source / name
+        if src.is_dir():
+            shutil.copytree(src, target / name, dirs_exist_ok=True)
+        elif src.exists():
+            shutil.copy2(src, target / name)
+
+
 def log_event(run_dir: Path, event: dict) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     event["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -103,10 +128,34 @@ def log_event(run_dir: Path, event: dict) -> None:
 def git_commit() -> str:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=str(REPO), text=True
+            ["git", "rev-parse", "HEAD"], cwd=str(REPO), text=True,
+            stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:
-        return "unknown"
+        try:
+            return json.loads((REPO / ".ae-source.json").read_text())["git_commit"]
+        except (OSError, KeyError, json.JSONDecodeError):
+            return "unknown"
+
+
+def record_source_provenance(rd: Path) -> None:
+    """Record the exact deployed snapshot without requiring a .git checkout."""
+    deployed_manifest = REPO / ".ae-source.json"
+    deployed_diff = REPO / ".ae-source.diff"
+    if deployed_manifest.is_file():
+        shutil.copy2(deployed_manifest, rd / "source-manifest.json")
+    if (REPO / ".git").exists():
+        source_diff = subprocess.check_output(
+            ["git", "diff", "HEAD", "--binary", "--", ".", ":(exclude)TShard"],
+            cwd=REPO,
+        )
+        (rd / "source.diff").write_bytes(source_diff)
+    elif deployed_diff.is_file():
+        shutil.copy2(deployed_diff, rd / "source.diff")
+    else:
+        (rd / "source.diff").write_text(
+            "Source diff unavailable; see checksums.txt for executed inputs.\n"
+        )
 
 
 def checksum_scripts(figs: list[str]) -> dict:
@@ -122,11 +171,134 @@ def checksum_scripts(figs: list[str]) -> dict:
 
 
 def read_ip_list() -> list[str]:
-    ip_file = REPO / "ip_list"
+    ip_file = ALIYUN_DIR / "priv_ip.txt"
     if not ip_file.exists():
         return []
     with open(ip_file) as f:
-        return [line.strip() for line in f if line.strip()]
+        return list(dict.fromkeys(line.strip() for line in f if line.strip()))
+
+
+def clear_stale_replica_ledger() -> None:
+    """Remove lifecycle records left by a released replica-only cluster.
+
+    The developer-owned runner is tracked separately in runner.json. When its
+    replica inventory is empty, a stale instances.txt must not prevent the
+    reviewer entry point from provisioning a fresh disposable replica cluster.
+    """
+    if read_ip_list():
+        return
+    for name in ("instances.txt", "cluster_plan.json", "public_ip.txt"):
+        path = ALIYUN_DIR / name
+        if path.is_file():
+            path.write_text("")
+
+
+def configured_ssh_key() -> Path:
+    sys.path.insert(0, str(ALIYUN_DIR))
+    try:
+        from cloud_common import load_config, ssh_key
+        return ssh_key(load_config())
+    except (RuntimeError, OSError, json.JSONDecodeError):
+        return REPO / "TShard"
+
+
+def cloud_runner() -> dict:
+    path = ALIYUN_DIR / "runner.json"
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def running_on_cloud_runner() -> bool:
+    """Return true when this process is already on the inventoried runner."""
+    runner = cloud_runner()
+    expected = {runner.get("private_ip"), runner.get("public_ip")} - {None, ""}
+    if not expected:
+        return False
+    try:
+        local_addresses = set(subprocess.check_output(
+            ["hostname", "-I"], text=True, timeout=5
+        ).split())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return bool(expected & local_addresses)
+
+
+def run_via_cloud_runner(args) -> int:
+    """Execute builds and clients inside the VPC, then fetch the immutable run."""
+    runner = cloud_runner()
+    host = runner.get("public_ip")
+    if not host:
+        print("ERROR: cloud runner inventory has no public IP", file=sys.stderr)
+        return 1
+    run_id = run_id_new()
+    key = configured_ssh_key()
+    common = [
+        "-i", str(key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new",
+    ]
+    mode = resolve_mode(args)
+    remote = (
+        f"cd /root/Raftel && RAFTEL_USE_PRIVATE_SSH=1 AE_RUN_ID_OVERRIDE={run_id} "
+        f"./ae run {args.fig} --mode {mode} --on-runner"
+    )
+    print(
+        f"Running on cloud runner {host}; experiment traffic remains inside the VPC."
+    )
+    rc = subprocess.call(["ssh", *common, f"root@{host}", remote])
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    fetch = subprocess.call([
+        "scp", "-r", *common, f"root@{host}:/root/Raftel/runs/{run_id}",
+        str(RUNS_DIR),
+    ])
+    if fetch != 0:
+        print(f"ERROR: could not fetch run {run_id} from cloud runner", file=sys.stderr)
+        return fetch
+    local_run = run_dir(run_id)
+    if rc != 0:
+        print(f"ERROR: cloud run {run_id} failed with exit {rc}.", file=sys.stderr)
+        print(f"Diagnostic evidence: {local_run}")
+        return rc
+    report = local_run / "index.html"
+    if not report.is_file():
+        print(f"ERROR: cloud run completed without a report: {report}", file=sys.stderr)
+        return 1
+    print(f"Fetched report: {report}")
+    return 0
+
+
+def resolve_mode(args) -> str:
+    """Return the selected public execution mode."""
+    return getattr(args, "mode", None) or "full"
+
+
+def prepare_mode_environment(mode: str) -> None:
+    """Reset mode-controlled variables and apply the selected public profile."""
+    controlled = (
+        "AE_SGX_MODE", "AE_SCALE",
+        "AE_FAULT_VALUES", "AE_LOAD_CLIENTS", "AE_REDIS_FAULTS", "AE_REPEATS",
+        "AE_ALLOW_MULTIPLEXING", "AE_TIMEOUT_SEC",
+    )
+    for name in controlled:
+        os.environ.pop(name, None)
+    if mode == "sim":
+        os.environ.update(SIMULATION_SCALE_ENV)
+    elif mode == "full":
+        os.environ["AE_SGX_MODE"] = "HW"
+    else:
+        raise ValueError(f"unsupported mode: {mode}")
+
+
+def required_host_count(figs: list[str], mode: str) -> int:
+    """Return physical replica hosts required by one reviewer invocation."""
+    if mode == "sim":
+        return 7
+    if mode != "full":
+        raise ValueError(f"unsupported mode: {mode}")
+    return 97 if any(fig in figs for fig in ("fig3", "fig4")) else 25
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +307,7 @@ def read_ip_list() -> list[str]:
 
 def cmd_doctor(args) -> int:
     """Check environment and flag blockers."""
-    profile = getattr(args, "profile", "smoke")
+    profile = getattr(args, "profile", "paper")
     ok = True
 
     print(f"=== Raftel AE doctor (profile={profile}) ===")
@@ -150,7 +322,7 @@ def cmd_doctor(args) -> int:
             ok = False
 
     # Python packages
-    for pkg in ("paramiko", "scp"):
+    for pkg in ("paramiko", "scp", "matplotlib"):
         try:
             __import__(pkg)
             print(f"  [OK] Python package: {pkg}")
@@ -167,24 +339,27 @@ def cmd_doctor(args) -> int:
         ok = False
 
     # SSH key
-    tshard = REPO / "TShard"
+    tshard = configured_ssh_key()
     if tshard.exists():
         mode = oct(tshard.stat().st_mode)[-3:]
         if mode in ("600", "400"):
-            print(f"  [OK] SSH key TShard (permissions {mode})")
+            print(f"  [OK] SSH key {tshard} (permissions {mode})")
         else:
-            print(f"  [WARN] SSH key TShard has loose permissions {mode} — run: chmod 600 TShard")
+            print(f"  [WARN] SSH key has loose permissions {mode} — run: chmod 600 {tshard}")
     else:
-        print(f"  [WARN] SSH key TShard not found — required for cloud runs")
+        print(f"  [WARN] SSH key not found: {tshard}")
+        if profile == "paper":
+            ok = False
 
     # Aliyun config
     ali_cfg = ALIYUN_DIR / "config.json"
     if ali_cfg.exists():
         print(f"  [OK] aliyun/config.json present")
+    elif (ALIYUN_DIR / "hosts.json").exists():
+        print("  [OK] prepared cluster inventory present; cloud API credentials are not required")
     else:
-        print(f"  [WARN] aliyun/config.json missing — copy from aliyun/config.example.json and fill in credentials")
-        if profile == "paper":
-            ok = False
+        print("  [INFO] cloud API credentials absent (expected on reviewer coordinators)")
+        # Path A uses existing hosts and does not require cloud API credentials.
 
     # ip_list for cloud runs
     if profile == "paper":
@@ -192,7 +367,7 @@ def cmd_doctor(args) -> int:
         if ips:
             print(f"  [OK] ip_list: {len(ips)} host(s) configured")
         else:
-            print(f"  [FAIL] ip_list is empty or missing — run: ./ae cloud up && ./ae cloud init")
+            print("  [FAIL] aliyun/priv_ip.txt is empty or missing — coordinator inventory is not prepared")
             ok = False
 
     # git state
@@ -207,46 +382,112 @@ def cmd_doctor(args) -> int:
         return 1
 
 
-def cmd_smoke(args) -> int:
-    """Run a local 4-node SIM-mode smoke test (~5 min)."""
-    print("=== Raftel AE smoke test (local SIM mode, f=1, p0) ===")
-    rc = subprocess.call(
-        [
-            sys.executable, "run.py",
-            "--p0", "--local",
-            "--faults", "1",
-            "--totaltee", "2",
-            "--views", "5",
-            "--cl-trans", "100",
-        ],
-        cwd=str(REPO),
-    )
-    if rc == 0:
-        print("smoke: PASSED")
-    else:
-        print(f"smoke: FAILED (exit {rc})")
-    return rc
-
-
 def cmd_run(args) -> int:
     """Run one or all experiments and produce a run directory."""
     figs = ["fig3", "fig4", "fig6"] if args.fig == "all" else [args.fig]
-    scale = getattr(args, "scale", "full")
+    mode = resolve_mode(args)
+    scale = "simulation" if mode == "sim" else "full"
+    required = required_host_count(figs, mode)
+
+    # A developer launcher forwards work to the prepared coordinator. A
+    # reviewer already logged into that coordinator must execute locally and
+    # reach replicas over their VPC addresses.
+    local_runner = running_on_cloud_runner()
+    if local_runner:
+        os.environ["RAFTEL_USE_PRIVATE_SSH"] = "1"
+    if not getattr(args, "on_runner", False) and not local_runner and cloud_runner():
+        return run_via_cloud_runner(args)
+
+    # A prepared runner bootstraps a disposable replica cluster without
+    # reviewer interaction. Credentials and runner identity remain outside the
+    # public artifact repository.
+    auto_provisioned = False
+    prepare_mode_environment(mode)
+    if local_runner and not read_ip_list():
+        print(f"No replica inventory found; provisioning {required} {mode} replica hosts...")
+        clear_stale_replica_ledger()
+        profile = "simulation" if scale == "simulation" else "paper"
+        if cmd_cloud(SimpleNamespace(
+            action="up", count=required, no_runner=True, profile=profile
+        )) != 0:
+            ledger = ALIYUN_DIR / "instances.txt"
+            if ledger.is_file() and ledger.read_text().strip():
+                print("Replica provisioning failed; releasing created resources...", file=sys.stderr)
+                cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False))
+            return 1
+        auto_provisioned = True
+        if cmd_cloud(SimpleNamespace(action="init", count=None, no_runner=True)) != 0:
+            cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False))
+            return 1
+
     run_id = run_id_new()
     rd = run_dir(run_id)
     rd.mkdir(parents=True, exist_ok=True)
 
+    # AE FIX (pipeline preflight): complete checks before an experiment clears outputs.
+    if cmd_doctor(SimpleNamespace(profile="paper")) or cmd_cloud(SimpleNamespace(action="check", profile=scale)):
+        if auto_provisioned:
+            cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False))
+        return 1
     ips = read_ip_list()
+    if len(ips) < required:
+        print(f"ERROR: {required} distinct hosts required; only {len(ips)} available.")
+        if auto_provisioned:
+            cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False))
+        return 1
+    active_ips = ips[:required]
+    hardware_evidence = RUNS_DIR / "last-cloud-check.json"
+    hardware_verified = False
+    if hardware_evidence.is_file():
+        evidence = json.loads(hardware_evidence.read_text())
+        hardware_verified = scale == "full" and bool(evidence.get("hardware_execution_verified"))
+    timeout_sec = int(os.environ.get("AE_TIMEOUT_SEC", "240"))
+    fault_values = [int(value) for value in os.environ.get(
+        "AE_FAULT_VALUES", "1 2 4 8 16 32"
+    ).split()]
+    load_clients = [int(value) for value in os.environ.get(
+        "AE_LOAD_CLIENTS", "1 2 4 8 16 32"
+    ).split()]
     manifest = {
         "run_id": run_id,
         "git_commit": git_commit(),
         "figs": figs,
         "scale": scale,
-        "cluster_ips": ips,
+        "mode": mode,
+        "cluster_ips": active_ips,
         "status": "running",
+        "data_origin": "measured",
+        "hardware_verified": hardware_verified,
+        "topology": "one-replica-per-host" if scale == "full" else "seven-host-simulation-up-to-fifteen-replicas-per-host",
+        "physical_host_count": len(active_ips),
+        "logical_replica_capacity": len(active_ips) if scale == "full" else len(active_ips) * 15,
+        "eligible_for_full_reproduction": scale == "full",
+        "parameters": {"fault_values": fault_values,
+            "batch_size": 400, "sgx_mode": "HW" if scale == "full" else "SIM",
+            "replicas_per_host": 1 if scale == "full" else "1-15",
+            "payload_fig3_fig4_bytes": 256, "payload_fig6_bytes": 1100,
+            "redis_value_bytes": 1024,
+            "redis_faults": int(os.environ.get("AE_REDIS_FAULTS", "8")),
+            "redis_load_clients": load_clients,
+            "redis_repeats": 3 if scale == "full" else 1,
+            "warmup_views": 5,
+            "wan_one_way_ms": 50,
+            "orchestration_timeout_sec": timeout_sec,
+            "timeout_policy": (
+                "Inherited wall-clock guard; not a standard duration. A timeout is "
+                "classified from preserved completion evidence and process logs."
+            )},
         "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     write_manifest(rd, manifest)
+    # AE FIX (provenance): record dirty source state as well as commit identity.
+    # Never copy the retired deployment key into run evidence. Older commits in
+    # this repository contained TShard, so a raw `git diff HEAD` would embed its
+    # deleted contents even though the file is no longer tracked.
+    record_source_provenance(rd)
+    hw = RUNS_DIR / "last-cloud-check.json"
+    if hw.exists(): shutil.copy2(hw, rd / "hardware.json")
+    shutil.copytree(REPO / "runs" / "reference", rd / "reference")
     log_event(rd, {"event": "run_start", "figs": figs, "scale": scale})
 
     # Write checksums of all scripts used
@@ -257,25 +498,56 @@ def cmd_run(args) -> int:
 
     # Build environment for sub-scripts
     env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     env["AE_RUN_ID"] = run_id
     env["AE_RUN_DIR"] = str(rd)
-    if scale == "mini":
-        env.update(MINI_SCALE_ENV)
+    env["AE_HOST_LIMIT"] = str(required)
+    # Keep credentials developer-owned while allowing scripts to use the same
+    # configured key as run.py. The path is never written into the repository.
+    try:
+        key = configured_ssh_key()
+    except (RuntimeError, OSError, json.JSONDecodeError):
+        key = None
+    if key is not None:
+        env["RAFTEL_SSH_KEY"] = str(key)
+    if scale == "simulation":
+        env.update(SIMULATION_SCALE_ENV)
 
     failed_figs = []
-    for fig in figs:
-        script = SCRIPTS[fig]
-        print(f"\n{'='*60}")
-        print(f"  Running {fig} (scale={scale})")
-        print(f"{'='*60}")
-        log_event(rd, {"event": "fig_start", "fig": fig})
-        rc = subprocess.call(["bash", str(script)], env=env, cwd=str(REPO))
-        log_event(rd, {"event": "fig_end", "fig": fig, "exit": rc})
-        if rc != 0:
-            print(f"  {fig}: FAILED (exit {rc})")
-            failed_figs.append(fig)
-        else:
-            print(f"  {fig}: OK")
+    active_fig = None
+    try:
+        for fig in figs:
+            active_fig = fig
+            script = SCRIPTS[fig]
+            print(f"\n{'='*60}")
+            print(f"  Running {fig} (mode={mode})")
+            print(f"{'='*60}")
+            log_event(rd, {"event": "fig_start", "fig": fig})
+            rc = subprocess.call(["bash", str(script)], env=env, cwd=str(REPO))
+            # Archive before the next invocation clears experiment directories.
+            archive_experiment_outputs(rd, fig)
+            log_event(rd, {"event": "fig_end", "fig": fig, "exit": rc})
+            if rc != 0:
+                print(f"  {fig}: FAILED (exit {rc})")
+                failed_figs.append(fig)
+            else:
+                print(f"  {fig}: OK")
+    except KeyboardInterrupt:
+        if active_fig:
+            archive_experiment_outputs(rd, active_fig)
+        failed_figs.extend(fig for fig in figs if fig not in failed_figs)
+        update_manifest(rd, {
+            "status": "failed",
+            "failed_figs": failed_figs,
+            "failure_reason": "reviewer_interrupted",
+            "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+        log_event(rd, {"event": "run_interrupted", "fig": active_fig})
+        print(f"Run interrupted; partial evidence archived in {rd}", file=sys.stderr)
+        if auto_provisioned:
+            print("Releasing the auto-provisioned replica cluster...", file=sys.stderr)
+            cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False))
+        return 130
 
     status = "failed" if failed_figs else "complete"
     update_manifest(rd, {
@@ -287,11 +559,23 @@ def cmd_run(args) -> int:
 
     print(f"\nRun ID: {run_id}")
     print(f"Run dir: {rd}")
+    report_rc = cmd_report(SimpleNamespace(run_id=run_id))
+    if report_rc:
+        update_manifest(rd, {"status": "failed", "report_error": True})
+        if auto_provisioned:
+            cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False))
+        return report_rc
     if failed_figs:
         print(f"FAILED figs: {failed_figs}")
+        if auto_provisioned:
+            cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False))
         return 1
+    if auto_provisioned and os.environ.get("AE_KEEP_CLOUD", "0") != "1":
+        print("Releasing the auto-provisioned replica cluster...")
+        if cmd_cloud(SimpleNamespace(action="down", count=None, no_runner=False)) != 0:
+            return 1
     print("All experiments complete.")
-    print(f"\nNext: ./ae report {run_id}")
+    print(f"Report: {rd / 'index.html'}")
     return 0
 
 
@@ -337,7 +621,7 @@ def cmd_status(args) -> int:
         m = json.load(f)
     print(f"Run ID  : {m.get('run_id')}")
     print(f"Status  : {m.get('status')}")
-    print(f"Scale   : {m.get('scale')}")
+    print(f"Mode    : {m.get('mode', m.get('scale'))}")
     print(f"Figs    : {m.get('figs')}")
     print(f"Started : {m.get('started_at')}")
     print(f"Finished: {m.get('finished_at', 'still running?')}")
@@ -347,86 +631,76 @@ def cmd_status(args) -> int:
 
 
 def cmd_cloud(args) -> int:
-    """Manage the Aliyun cluster lifecycle."""
+    """Provision, initialize, validate, or release the cloud cluster."""
     action = args.action
 
     if action == "up":
-        count = getattr(args, "count", None)
-        script = ALIYUN_DIR / "create_run_instances.py"
-        if not script.exists():
-            print(f"Not found: {script}", file=sys.stderr)
-            return 1
-        cmd = [sys.executable, str(script)]
-        if count:
-            cmd += ["--count", str(count)]
-        rc = subprocess.call(cmd, cwd=str(REPO))
-        if rc != 0:
-            return rc
+        create_script = ALIYUN_DIR / "create_run_instances.py"
         wait_script = ALIYUN_DIR / "wait_instances_ready.py"
-        if wait_script.exists():
-            rc = subprocess.call([sys.executable, str(wait_script)], cwd=str(REPO))
-        return rc
+        if not create_script.is_file() or not wait_script.is_file():
+            print("cloud lifecycle scripts are missing", file=sys.stderr)
+            return 1
+        existing_runner = ALIYUN_DIR / "runner.json"
+        runner_backup = existing_runner.read_bytes() if existing_runner.is_file() else None
+        command = [sys.executable, str(create_script)]
+        count = getattr(args, "count", None)
+        if count:
+            command += ["--count", str(count)]
+        if getattr(args, "profile", "paper") == "simulation":
+            command += ["--profile", "simulation"]
+        if getattr(args, "no_runner", False):
+            command.append("--no-runner")
+        if subprocess.call(command, cwd=str(REPO)) != 0:
+            return 1
+        try:
+            wait_rc = subprocess.call(
+                [sys.executable, str(wait_script)], cwd=str(REPO)
+            )
+        finally:
+            # Replica-only discovery writes an empty runner record. Preserve
+            # the prepared coordinator identity even when readiness fails.
+            if runner_backup is not None:
+                existing_runner.write_bytes(runner_backup)
+        return 0 if wait_rc == 0 else 1
 
-    elif action == "init":
-        deploy = DEPLOYMENT_DIR / "cloud_deploy.sh"
-        config_sh = DEPLOYMENT_DIR / "cloud_config.sh"
-        for script in (deploy, config_sh):
-            if not script.exists():
-                print(f"Not found: {script}", file=sys.stderr)
+    if action == "init":
+        for script in (DEPLOYMENT_DIR / "cloud_deploy.sh", DEPLOYMENT_DIR / "cloud_config.sh"):
+            if not script.is_file():
+                print(f"missing deployment script: {script}", file=sys.stderr)
                 return 1
-            rc = subprocess.call(["bash", str(script)], cwd=str(REPO))
-            if rc != 0:
-                return rc
+            if subprocess.call(["bash", str(script)], cwd=str(REPO)) != 0:
+                return 1
         return 0
 
-    elif action == "check":
-        ips = read_ip_list()
-        if not ips:
-            print("ip_list is empty — run: ./ae cloud up && ./ae cloud init")
-            return 1
-        print(f"Checking {len(ips)} host(s)...")
-        ssh_key = REPO / "TShard"
-        all_ok = True
-        for ip in ips:
-            check_cmd = (
-                "test -c /dev/sgx_enclave && echo sgx:ok || echo sgx:MISSING; "
-                "test -d /opt/intel/sgxsdk && echo sdk:ok || echo sdk:MISSING; "
-                "command -v redis-server >/dev/null && echo redis:ok || echo redis:MISSING; "
-                # AE (§六): hiredis is required for experiment3 Redis builds; check both
-                # the header (libhiredis-dev) and the shared library.
-                "pkg-config --exists hiredis 2>/dev/null && echo hiredis:ok || "
-                "  (test -f /usr/include/hiredis/hiredis.h && echo hiredis:ok || echo hiredis:MISSING); "
-                "test -f /usr/local/lib/libsalticidae.a && echo salticidae:ok || echo salticidae:MISSING"
-            )
-            result = subprocess.run(
-                ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
-                 f"root@{ip}", check_cmd],
-                capture_output=True, text=True,
-            )
-            status = result.stdout.strip().replace("\n", "  ")
-            if "MISSING" in status:
-                print(f"  [{ip}] FAIL: {status}")
-                all_ok = False
-            else:
-                print(f"  [{ip}] OK: {status}")
-        return 0 if all_ok else 1
-
-    elif action == "down":
+    if action == "down":
         script = ALIYUN_DIR / "delete_instances.py"
-        if not script.exists():
-            print(f"Not found: {script}", file=sys.stderr)
+        if not script.is_file():
+            print(f"missing release script: {script}", file=sys.stderr)
             return 1
-        print("WARNING: this will release all Aliyun ECS instances. Press Ctrl-C to abort.")
-        try:
-            input("Press Enter to continue...")
-        except KeyboardInterrupt:
-            print("\nAborted.")
-            return 0
         return subprocess.call([sys.executable, str(script)], cwd=str(REPO))
 
-    else:
-        print(f"Unknown cloud action: {action}", file=sys.stderr)
-        return 1
+    if action == "check":
+        if running_on_cloud_runner():
+            os.environ["RAFTEL_USE_PRIVATE_SSH"] = "1"
+        ips = read_ip_list()
+        if not ips:
+            print("aliyun/priv_ip.txt is empty — coordinator inventory is not prepared")
+            return 1
+        inventory_path = ALIYUN_DIR / "hosts.json"
+        if inventory_path.is_file():
+            inventory = json.loads(inventory_path.read_text())
+            ips = list(dict.fromkeys(
+                h.get("private_ip") for h in inventory if h.get("private_ip")
+            ))
+        sys.path.insert(0, str(REPO / "scripts"))
+        from cloud_check import check_cluster
+        return check_cluster(
+            ips, configured_ssh_key(), RUNS_DIR / "last-cloud-check.json",
+            profile=getattr(args, "profile", "paper"),
+        )
+
+    print(f"Unknown cloud action: {action}", file=sys.stderr)
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -444,18 +718,15 @@ def main():
 
     # doctor
     p_doctor = sub.add_parser("doctor", help="Check environment")
-    p_doctor.add_argument("--profile", choices=("paper", "smoke"), default="smoke")
+    p_doctor.set_defaults(profile="paper")
     p_doctor.set_defaults(func=cmd_doctor)
-
-    # smoke
-    p_smoke = sub.add_parser("smoke", help="Quick local SIM test (~5 min)")
-    p_smoke.set_defaults(func=cmd_smoke)
 
     # run
     p_run = sub.add_parser("run", help="Run experiment(s)")
     p_run.add_argument("fig", choices=("fig3", "fig4", "fig6", "all"))
-    p_run.add_argument("--scale", choices=("full", "mini"), default="full",
-                       help="full=paper scale (hours); mini=reduced scale for trend check (~30 min)")
+    p_run.add_argument("--mode", choices=("sim", "full"), default=None,
+                       help="sim=7 multiplexed hosts with SGX SIM; full=one SGX HW VM per replica")
+    p_run.add_argument("--on-runner", action="store_true", help=argparse.SUPPRESS)
     p_run.set_defaults(func=cmd_run)
 
     # report
@@ -469,15 +740,21 @@ def main():
     p_status.set_defaults(func=cmd_status)
 
     # cloud
-    p_cloud = sub.add_parser("cloud", help="Manage Aliyun cluster")
-    p_cloud.add_argument("action", choices=("up", "init", "check", "down"))
-    p_cloud.add_argument("--count", type=int, default=None,
-                         help="Number of ECS instances to provision (up only)")
+    p_cloud = sub.add_parser("cloud", help="Validate the prepared replica cluster")
+    p_cloud.add_argument("action", choices=("check",))
+    p_cloud.set_defaults(count=None, no_runner=False, profile="paper")
     p_cloud.set_defaults(func=cmd_cloud)
 
     args = parser.parse_args()
-    sys.exit(args.func(args))
+    # AE FIX: shared binaries/config/current paths require an exclusive run lock.
+    if args.command == "run":
+        with open(REPO / ".ae.lock", "w") as lock:
+            try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print("ERROR: another AE run is active", file=sys.stderr); return 1
+            return args.func(args)
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

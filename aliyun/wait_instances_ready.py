@@ -15,9 +15,8 @@ from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.acs_exception.exceptions import ClientException, ServerException
 from aliyunsdkcore.request import CommonRequest
 
+from cloud_common import ALIYUN_DIR, PROJECT_ROOT, load_config, ssh_key
 
-ALIYUN_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ALIYUN_DIR.parent
 
 
 def read_nonempty_lines(path: Path) -> List[str]:
@@ -26,7 +25,7 @@ def read_nonempty_lines(path: Path) -> List[str]:
     return [line.strip() for line in path.read_text().splitlines() if line.strip()]
 
 
-def describe_instance(client: AcsClient, instance_id: str) -> Tuple[str, Optional[str]]:
+def describe_instance(client: AcsClient, instance_id: str) -> dict:
     request = CommonRequest()
     request.set_accept_format("json")
     request.set_domain("ecs.aliyuncs.com")
@@ -49,7 +48,20 @@ def describe_instance(client: AcsClient, instance_id: str) -> Tuple[str, Optiona
         .get("IpAddress", [])
     )
     private_ip = private_ips[0] if private_ips else None
-    return status, private_ip
+    public_ips = result.get("PublicIpAddress", {}).get("IpAddress", [])
+    eip = result.get("EipAddress", {}).get("IpAddress")
+    public_ip = public_ips[0] if public_ips else (eip or None)
+    return {
+        "instance_id": instance_id,
+        "status": status,
+        "private_ip": private_ip,
+        "public_ip": public_ip,
+        "instance_type": result.get("InstanceType"),
+        "image_id": result.get("ImageId"),
+        "region_id": result.get("RegionId"),
+        "zone_id": result.get("ZoneId"),
+        "creation_time": result.get("CreationTime"),
+    }
 
 
 def ssh_is_ready(ip: str, user: str, key: Path, connect_timeout: int) -> bool:
@@ -82,21 +94,23 @@ def main() -> int:
     parser.add_argument("--interval", type=float, default=10.0, help="poll interval in seconds")
     parser.add_argument("--timeout", type=float, default=900.0, help="overall timeout in seconds")
     parser.add_argument("--connect-timeout", type=int, default=5, help="SSH connection timeout in seconds")
-    parser.add_argument("--key", type=Path, default=PROJECT_ROOT / "TShard", help="SSH private key")
+    parser.add_argument("--key", type=Path, default=None, help="SSH private key override")
     parser.add_argument("--user", default="root", help="SSH user")
     args = parser.parse_args()
 
     if args.interval <= 0 or args.timeout <= 0 or args.connect_timeout <= 0:
         parser.error("timeouts and polling interval must be positive")
-    if not args.key.is_file():
-        parser.error(f"SSH private key not found: {args.key}")
 
     try:
         instance_ids = read_nonempty_lines(ALIYUN_DIR / "instances.txt")
-        config = json.loads((ALIYUN_DIR / "config.json").read_text())
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        config = load_config()
+        plan = json.loads((ALIYUN_DIR / "cluster_plan.json").read_text())
+    except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+    args.key = (args.key or ssh_key(config)).resolve()
+    if not args.key.is_file():
+        parser.error(f"SSH private key not found: {args.key}")
     if not instance_ids:
         print("ERROR: aliyun/instances.txt contains no instance IDs", file=sys.stderr)
         return 1
@@ -113,11 +127,11 @@ def main() -> int:
     deadline = time.monotonic() + args.timeout
 
     while True:
-        ready_ips: List[str] = []
+        ready_hosts: List[dict] = []
         all_ready = True
         for instance_id in instance_ids:
             try:
-                status, private_ip = describe_instance(client, instance_id)
+                host = describe_instance(client, instance_id)
             except (
                 ClientException,
                 ServerException,
@@ -131,23 +145,53 @@ def main() -> int:
                 continue
 
             ssh_ready = False
-            if status == "Running" and private_ip:
-                ssh_ready = ssh_is_ready(private_ip, args.user, args.key, args.connect_timeout)
+            if host["status"] == "Running" and host["public_ip"]:
+                ssh_ready = ssh_is_ready(
+                    host["public_ip"], args.user, args.key, args.connect_timeout
+                )
             print(
-                f"[{instance_id}] status={status} "
-                f"private_ip={private_ip or '-'} ssh={'ready' if ssh_ready else 'waiting'}"
+                f"[{instance_id}] status={host['status']} "
+                f"private_ip={host['private_ip'] or '-'} "
+                f"public_ip={host['public_ip'] or '-'} "
+                f"ssh={'ready' if ssh_ready else 'waiting'}"
             )
-            if status == "Running" and private_ip and ssh_ready:
-                ready_ips.append(private_ip)
+            if (
+                host["status"] == "Running"
+                and host["private_ip"]
+                and host["public_ip"]
+                and ssh_ready
+            ):
+                host["role"] = (
+                    "runner"
+                    if instance_id in plan.get("runner_instance_ids", [])
+                    else "replica"
+                )
+                ready_hosts.append(host)
             else:
                 all_ready = False
 
-        if all_ready and len(ready_ips) == len(instance_ids):
-            output = ALIYUN_DIR / "priv_ip.txt"
-            temporary = output.with_suffix(".txt.tmp")
-            temporary.write_text("".join(f"{ip}\n" for ip in ready_ips))
-            temporary.replace(output)
-            print(f"All {len(ready_ips)} instances are ready; wrote {output}")
+        if all_ready and len(ready_hosts) == len(instance_ids):
+            ordered = sorted(
+                ready_hosts,
+                key=lambda h: (h["role"] != "runner", instance_ids.index(h["instance_id"])),
+            )
+            inventory = ALIYUN_DIR / "hosts.json"
+            inventory.write_text(json.dumps(ordered, indent=2) + "\n")
+            replicas = [h for h in ordered if h["role"] == "replica"]
+            runners = [h for h in ordered if h["role"] == "runner"]
+            (ALIYUN_DIR / "priv_ip.txt").write_text(
+                "".join(f"{h['private_ip']}\n" for h in replicas)
+            )
+            (ALIYUN_DIR / "public_ip.txt").write_text(
+                "".join(f"{h['public_ip']}\n" for h in ordered)
+            )
+            (ALIYUN_DIR / "runner.json").write_text(
+                json.dumps(runners[0] if runners else {}, indent=2) + "\n"
+            )
+            print(
+                f"All {len(ordered)} instances are ready: "
+                f"{len(replicas)} replica(s), {len(runners)} runner"
+            )
             return 0
 
         remaining = deadline - time.monotonic()

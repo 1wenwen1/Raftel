@@ -26,7 +26,7 @@ Raftel/
 ├── scripts/
 │   ├── plot_fig3.py / plot_fig4.py / plot_fig6.py
 │   └── gen_report.py
-└── runs/reference/   Approximate reference values for PASS/WARN/FAIL
+└── runs/reference/   Author-supplied CSVs and documented acceptance rules
 ```
 
 ---
@@ -135,9 +135,10 @@ values are `--payload 1100 --kv-value-len 1024`.
 
 ## SGX Simulation vs. Hardware Mode
 
-`Makefile` accepts `SGX_MODE=SIM` (default for local smoke tests) or
+`Makefile` accepts `SGX_MODE=SIM` or
 `SGX_MODE=HW` (required for paper runs on SGX-capable cloud nodes).  The
-experiment scripts pass `--sgx-mode HW` to `run.py`, which sets
-`SGX_MODE=HW` in the make invocation and raises an error if make fails.
+experiment scripts select the mode from the AE profile: Full passes
+`--sgx-mode HW`, while Simulation passes `--sgx-mode SIM`.
 
-Local `./ae smoke` always uses SIM mode; `./ae run` passes HW mode.
+Reviewer `./ae run` selects SIM or HW from `--mode sim` or `--mode full`
+respectively.

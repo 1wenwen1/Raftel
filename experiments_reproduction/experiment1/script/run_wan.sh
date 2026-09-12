@@ -10,13 +10,15 @@ OUT_DIR="${EXP_DIR}/out"
 RESULT_DIR="${EXP_DIR}/results"
 CURRENT_LOG_DIR="${LOG_DIR}/current"
 CURRENT_RESULT_DIR="${RESULT_DIR}/current"
-SSH_KEY="${REPO}/TShard"
-IP_LIST_FILE="${REPO}/ip_list"
+SSH_KEY="${RAFTEL_SSH_KEY:-${REPO}/TShard}"
+IP_LIST_FILE="${REPO}/aliyun/priv_ip.txt"
 STATS_FILE="${EXP_DIR}/stats.txt"
+SGX_MODE="${AE_SGX_MODE:-HW}"
 
 protocol_flags=(p0 p1 p2 p3 p4 p0)
 protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus Raftel-Worst)
-fault_values=(1 2 4 8 16 32)
+# AE FIX: honor the CLI scale override; defaults remain the paper sweep.
+read -r -a fault_values <<< "${AE_FAULT_VALUES:-1 2 4 8 16 32}"
 total_runs=$(( ${#protocol_flags[@]} * ${#fault_values[@]} ))
 
 if [[ ! -f "${SSH_KEY}" ]]; then
@@ -51,27 +53,19 @@ for dir in "${EXE_DIR}" "${LOG_DIR}" "${OUT_DIR}" "${RESULT_DIR}"; do
 done
 
 remove_wan_delay() {
-    local ip
-    for ip in "${remote_ips[@]}"; do
-        ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-            "sudo tc qdisc del dev eth0 root 2>/dev/null || true" || true
-    done
+    python3 "${REPO}/scripts/network.py" lan || echo "ERROR: network cleanup failed; run scripts/network.py lan before reuse" >&2
 }
 
-trap remove_wan_delay EXIT INT TERM
+trap remove_wan_delay EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-echo "Configuring 50ms WAN delay on ${#remote_ips[@]} remote host(s)..."
-for ip in "${remote_ips[@]}"; do
-    # P0-4: WAN netem setup failures must be fatal — a silent skip means some
-    # node pairs have no delay, making the result invalid.
-    ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-        "sudo tc qdisc del dev eth0 root 2>/dev/null || true; sudo tc qdisc add dev eth0 root netem delay 50ms" \
-        || { echo "ERROR: failed to configure netem on ${ip}" >&2; exit 1; }
-done
+# AE FIX (network validation): discover the private interface and verify tc; eth0 is not universal.
+python3 "${REPO}/scripts/network.py" wan || exit 1
 
 : > "${STATS_FILE}"
 
-# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
+# AE: run a fixed 5-view warm-up before each measurement point and discard
 # the result.  The warm-up is intentionally not configurable so that the paper
 # parameters remain the only thing that controls the measurement.
 warmup_one() {
@@ -90,7 +84,7 @@ warmup_one() {
     (
         cd "${REPO}"
         python3 run.py "--${flag}" \
-            --sgx-mode HW \
+            --sgx-mode "${SGX_MODE}" \
             --experiment-number 1 \
             --batchsize 400 \
             --payload 256 \
@@ -98,7 +92,9 @@ warmup_one() {
             --repeats 1 \
             --views 5 \
             "${protocol_args[@]}"
-    ) >/dev/null 2>&1 || true   # warm-up failures are non-fatal
+    ) > "${run_log_dir}/warmup.log" 2>&1
+    # Warmup output is intentionally discarded; keep parser input measurement-only.
+    : > "${STATS_FILE}"
 }
 
 run_one() {
@@ -125,16 +121,14 @@ run_one() {
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
 
-    # AE (§三): 5-view warm-up before the measured run
-    warmup_one "${flag}" "${protocol}" "${faults}"
+    warmup_one "${flag}" "${protocol}" "${faults}" || { echo "ERROR: warm-up failed; see ${run_log_dir}/warmup.log" >&2; return 1; }
 
     echo "[$(date --iso-8601=seconds)] START ${tag}"
 
     (
         cd "${REPO}"
-        # P0-2: cloud runs must use HW mode to reproduce paper's SGX hardware results
         python3 run.py "--${flag}" \
-            --sgx-mode HW \
+            --sgx-mode "${SGX_MODE}" \
             --experiment-number 1 \
             --batchsize 400 \
             --payload 256 \

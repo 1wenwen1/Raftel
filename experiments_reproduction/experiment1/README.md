@@ -19,7 +19,8 @@ Before the full experiment starts, the script removes the previous contents of `
 ## Prerequisites
 
 - `/root/Raftel/ip_list` must contain the remote host IP addresses.
-- `/root/Raftel/TShard` must be a valid SSH private key for the remote root user.
+- `RAFTEL_SSH_KEY` must point to the private key for the remote root user. The
+  key is supplied on the prepared coordinator and is never part of this repo.
 - The remote project path must match `DAMYSUS_REMOTE_ROOT`; it defaults to `/root/Raftel`.
 - The remote root user must be allowed to configure `eth0` with `tc`.
 

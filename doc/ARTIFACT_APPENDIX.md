@@ -29,15 +29,17 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 | Figure 6 script (Redis E2E WAN) | `experiments_reproduction/experiment3/script/run_redis_wan.sh` |
 | Plot scripts | `scripts/plot_fig{3,4,6}.py` |
 | HTML report generator | `scripts/gen_report.py` |
-| Reference values (PDF-read approximations) | `runs/reference/fig{3,4,6}.csv` |
+| Exact author-supplied reference data | `runs/reference/original/` |
 | Initialization script for cloud nodes | `deployment/sourcefile/init.sh` |
-| Alibaba Cloud lifecycle scripts | `aliyun/` |
+| Replica lifecycle and inventory | `aliyun/` |
 
 ### What Is Not Delivered
 
-- The SSH private key (`TShard`) — distributed to reviewers separately via HotCRP.
-- Alibaba Cloud credentials (`aliyun/config.json`) — must be filled in by the reviewer
-  for Path B; not required for Path A (pre-provisioned cluster).
+- Coordinator provisioning instructions and cloud account credentials. The
+  authors prepare the coordinator before evaluation; the reviewer command
+  creates disposable replica instances through its preconfigured account.
+- The cluster SSH private key. It is delivered to the coordinator through the
+  review access channel and is never tracked in this repository.
 - Binary blobs (SGX SDK, PSW, SGX SSL) — bundled in `deployment/sourcefile/archive.tar.gz`
   (tracked via Git LFS).
 
@@ -49,12 +51,12 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 - **Intel SGX-capable CPU** with the in-kernel SGX driver enabled.
   Cloud instance: Alibaba Cloud `ecs.g7t.2xlarge` (8 vCPU / 32 GB / SGX-TEE).
   Verify SGX devices are present: `ls /dev/sgx_enclave /dev/sgx_provision`.
-- **Network**: 10 Gbps private network between nodes (Alibaba Cloud VPC default).
+- **Network**: the paper used a 10 Gbps private network between nodes.
   WAN experiments emulate 50 ms one-way delay using `tc netem` on each node.
 
 Maximum instance counts by figure:
 - Figure 3: up to 97 instances (f=32, 3×32+1 replicas).
-- Figure 4: up to 49 instances (f=16).
+- Figure 4: up to 97 instances (f=32, 3×32+1 replicas).
 - Figure 6: 25 instances (n = 3×8+1).
 
 ---
@@ -75,7 +77,6 @@ and by the manual steps in the README on the coordinator.
 | Python ≥ 3.8 | — | run.py, ae, plot scripts |
 | matplotlib | — | Figure generation |
 | paramiko + scp | — | SSH/SCP orchestration |
-| aliyun-python-sdk-core | — | Alibaba Cloud API (Path B only) |
 
 ---
 
@@ -87,7 +88,7 @@ and by the manual steps in the README on the coordinator.
 | Fig 4 | LAN TEE-config effect: S1 > S2 ≥ S3 > S4 throughput, S1 ≤ … ≤ S4 latency | **Full reproduction** — four configurations at f∈{1,2,4,8,16,32}. Paper-exact: S1 at f=32 = 31.5 kTPS. |
 | Fig 6 | Redis E2E: Achilles 95 TPS, Chained 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS (peak) | **Full reproduction** — load sweep clients∈{1,2,4,8,16,32}, 3 repeats. Absolute values within ±40%; ordering must match. |
 
-Absolute throughput and latency numbers depend on SGX attestation overhead,
+Absolute throughput and latency numbers depend on SGX enclave overhead,
 cloud network jitter, and instance placement within the Alibaba Cloud region.
 We consider the artifact successfully reproduced when the **ordering** of
 protocols is consistent with the paper and absolute values fall within the
@@ -97,48 +98,33 @@ protocols is consistent with the paper and absolute values fall within the
 
 ## Experiment Workflow
 
-### Path A — Pre-provisioned cluster (recommended for reviewers)
+### Reviewer workflow on the pre-provisioned coordinator
 
 ```
-./ae doctor --profile paper   # verify all dependencies
-./ae run all                   # run Figs 3, 4, 6 (~4–6 h)
-./ae report                    # generate figures + HTML report
+./ae run all --mode sim       # complete SGX SIM sweep, 7 multiplexed hosts
+# or
+./ae run all --mode full      # paper topology, one replica per VM
 ```
 
-Open `runs/<RUN_ID>/index.html` for reproduced figures with PASS/WARN/FAIL verdicts.
-
-### Path B — Reviewer's own Alibaba Cloud account
-
-```
-# 1. Copy and fill in credentials
-cp aliyun/config.example.json aliyun/config.json   # edit with your account
-
-# 2. Provision and initialise nodes
-./ae cloud up --count 97
-./ae cloud init
-./ae cloud check
-
-# 3. Run experiments and generate report
-./ae run all
-./ae report
-```
-
-### Reduced-scale check (~30 min, SIM mode)
-
-```
-./ae run all --scale mini
-./ae report
-```
+Both commands produce `runs/<RUN_ID>/index.html` automatically. Simulation
+executes the full fault/load sweep in SGX SIM mode on seven hosts, with up to 15
+replicas per host (97 logical replicas at f=32). It verifies the pipeline and
+trends but is not eligible for a hardware reproduction verdict. Full uses SGX
+HW, one replica per VM, and three Fig. 6 repeats.
+The entry point automatically creates, initializes, checks, and releases the
+required replica resources when no prepared replica inventory exists. Reviewers
+do not handle cloud credentials or invoke lifecycle commands themselves.
 
 ---
 
 ## Notes on AE Fixes
 
-Three correctness bugs in the original code were fixed for this AE:
+The original artifact required the following correctness and hardware-runtime
+fixes for an auditable AE workflow:
 
 1. **SGX SIM mode hardcoded** (`run.py` line 127): original `sgxmode = "SIM"` was
    never overridden for cloud runs. Fixed by adding `--sgx-mode {SIM,HW}` CLI flag;
-   experiment scripts pass `--sgx-mode HW`.
+   Full passes `--sgx-mode HW`; Simulation passes `--sgx-mode SIM`.
 
 2. **Raftel-Worst wrong `totaltee`** (Figure 3): original script used
    `--totaltee f`, but §7.2 defines Raftel-Worst as `m=0` (no TEE fast path).
@@ -149,4 +135,12 @@ Three correctness bugs in the original code were fixed for this AE:
    request (key + 1024 B value + 14 B header = 1043 B > 256 B).
    Fixed to `--payload 1100 --kv-value-len 1024`.
 
-See `doc/CODE_OVERVIEW.md` for full details.
+4. **Hardware enclave initialization:** chained-protocol state hashing ran
+   during enclave global construction, before the trusted runtime was ready
+   for its C++/OpenSSL work. It now runs from `initialize_variables()` after
+   enclave creation. Protocol transitions and message flow are unchanged.
+
+5. **Hardware enclave stack:** `StackMaxSize` is raised from 256 KiB to 1 MiB
+   to prevent the real SGX path from exhausting the enclave stack.
+
+See `doc/CODE_OVERVIEW.md` for implementation details.

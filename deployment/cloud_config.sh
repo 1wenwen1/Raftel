@@ -1,25 +1,19 @@
-#!/bin/bash
-
-# Read the list of IP addresses
-IP_LIST=$(cat /root/Raftel/aliyun/priv_ip.txt)
-
-# Use the counter to name the tmux session from 1
-count=1
-
-
-echo "Config SGX environment..."
-# Loop the list of IP addresses
-for ip in $IP_LIST
-do
-    # Create a new tmux session and name it a number
-    # Create (or attach to) a tmux session named setup<count> without failing if it already exists
-    tmux has-session -t "setup$count" 2>/dev/null && tmux kill-session -t "setup$count"
-    tmux new-session -Ad -s "setup$count"
-    
-    # Prepare SGX, reboot, wait for SSH, and then run the remaining setup.
-    tmux send-keys -t "setup$count" \
-        "bash /root/Raftel/deployment/configure_experiment_server.sh '$ip'" C-m
-
-    # Add a counter
-    ((count++))
+#!/usr/bin/env bash
+# AE FIX (pipeline reliability): wait for initialization jobs and propagate failures; detached tmux
+# sessions previously returned success before SDK installation or reboot finished.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+mkdir -p "${REPO}/deployment/logs"
+pids=()
+while read -r ip; do
+    [[ -z "$ip" ]] && continue
+    bash "${REPO}/deployment/configure_experiment_server.sh" "$ip" > "${REPO}/deployment/logs/${ip}.log" 2>&1 &
+    pids+=("$!")
+done < "${REPO}/aliyun/public_ip.txt"
+(( ${#pids[@]} > 0 )) || { echo "ERROR: no deployment hosts" >&2; exit 1; }
+failed=0
+for pid in "${pids[@]}"; do
+    wait "$pid" || failed=$((failed + 1))
+    echo "Initialization job completed; failures so far: ${failed}. Logs: deployment/logs/"
 done
+(( failed == 0 ))

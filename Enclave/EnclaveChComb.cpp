@@ -10,7 +10,6 @@ View   CHCOMBview  = 0;             // current view
 Phase1 CHCOMBphase = PH1_NEWVIEW;   // current phase
 
 
-
 // increments the (view,phase) pair
 void CHCOMBincrement() {
   if (CHCOMBphase == PH1_PREPARE) {

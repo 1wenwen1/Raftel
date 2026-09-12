@@ -3,6 +3,7 @@ import argparse
 import csv
 import glob
 import statistics
+import math
 from pathlib import Path
 
 
@@ -40,17 +41,27 @@ def read_run(stats_dir: Path):
 
     # P0-7: zero-completion runs are failures, not valid data points.
     # The caller checks this and marks the row as failed.
-    if completed == 0:
+    if not math.isfinite(completed) or completed <= 0:
         raise RuntimeError("zero completions: all client requests failed or timed out")
 
+    # AE FIX: zero-completion clients have no reply window; never let epoch zero
+    # contaminate the global measurement window. Keep successful clients only here.
+    clients = [client for client in clients if client["num_completed"] > 0]
     first_us = min(client["first_reply_unix_us"] for client in clients)
     last_us = max(client["last_reply_unix_us"] for client in clients)
     window_sec = (last_us - first_us) / 1_000_000.0
-    throughput = completed / window_sec / 1000.0 if window_sec > 0 else 0.0
+    if not math.isfinite(window_sec) or window_sec <= 0:
+        raise RuntimeError("invalid or empty global reply window")
+    throughput = completed / window_sec / 1000.0
 
     def mean(key):
-        values = [client[key] for client in clients if key in client]
-        return statistics.fmean(values) if values else 0.0
+        if not all(key in client and math.isfinite(client[key]) and client[key] >= 0 for client in clients):
+            raise RuntimeError(f"missing/invalid client latency metric: {key}")
+        if key == "e2e_latency_avg_ms":
+            # AE FIX: weight client means by completed requests, not client count.
+            return sum(c[key] * c["num_completed"] for c in clients) / completed
+        # These are means of per-client percentiles, not pooled percentiles.
+        return statistics.fmean(client[key] for client in clients)
 
     return {
         "e2e_throughput_ktps": throughput,

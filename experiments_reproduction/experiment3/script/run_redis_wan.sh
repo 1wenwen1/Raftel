@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
+# AE FIX (paper section 7.6): successful replies must represent successful Redis operations.
+export AE_REQUIRE_KV_SUCCESS=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
@@ -10,20 +12,21 @@ OUT_DIR="${EXP_DIR}/out"
 RESULT_DIR="${EXP_DIR}/results"
 CURRENT_LOG_DIR="${LOG_DIR}/current"
 CURRENT_RESULT_DIR="${RESULT_DIR}/current"
-SSH_KEY="${REPO}/TShard"
-IP_LIST_FILE="${REPO}/ip_list"
+SSH_KEY="${RAFTEL_SSH_KEY:-${REPO}/TShard}"
+IP_LIST_FILE="${REPO}/aliyun/priv_ip.txt"
 STATS_FILE="${EXP_DIR}/stats.txt"
+SGX_MODE="${AE_SGX_MODE:-HW}"
 PER_RUN_FILE="$(mktemp)"
 
 protocol_flags=(p0 p1 p2 p3 p4)
 protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus)
-repeats=3
-faults=8
-requested_totaltee=9
+repeats="${AE_REPEATS:-3}"
+faults="${AE_REDIS_FAULTS:-8}"
+requested_totaltee=$((faults + 1))
 # P0-5: load sweep — run at multiple client counts to produce a throughput-latency curve.
 # Paper Figure 6 shows a curve, not a single point.
-load_sweep_clients=(1 2 4 8 16 32)
-# AE FIX (§7.6): paper specifies "1 KB values" (kv-value-len=1024).
+read -r -a load_sweep_clients <<< "${AE_LOAD_CLIENTS:-1 2 4 8 16 32}"
+# AE FIX (paper section 7.6): paper specifies "1 KB values" (kv-value-len=1024).
 # KVAppCodec::encode requires klen + vlen + 14 ≤ PAYLOAD_SIZE.
 # keyspace=10000 → key max 5 chars; 5+1024+14=1043, so PAYLOAD_SIZE must be ≥1043.
 # Original script used payload=256 which caused encode() to return false silently.
@@ -65,30 +68,22 @@ done
 : > "${STATS_FILE}"
 
 remove_wan_delay() {
-    local ip
-    for ip in "${remote_ips[@]}"; do
-        ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-            "sudo tc qdisc del dev eth0 root 2>/dev/null || true" || true
-    done
+    python3 "${REPO}/scripts/network.py" lan || echo "ERROR: network cleanup failed; run scripts/network.py lan before reuse" >&2
 }
 cleanup() {
     remove_wan_delay
     rm -f "${PER_RUN_FILE}"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-echo "Configuring 50ms WAN delay on ${#remote_ips[@]} remote host(s)..."
-for ip in "${remote_ips[@]}"; do
-    # P0-4: WAN netem setup failures must be fatal — a silent skip means some
-    # node pairs have no delay, making the result invalid.
-    ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-        "sudo tc qdisc del dev eth0 root 2>/dev/null || true; sudo tc qdisc add dev eth0 root netem delay 50ms" \
-        || { echo "ERROR: failed to configure netem on ${ip}" >&2; exit 1; }
-done
+# AE FIX (network validation): discover the private interface and verify tc; eth0 is not universal.
+python3 "${REPO}/scripts/network.py" wan || exit 1
 
 printf 'protocol,load_clients,repeat,e2e_throughput_ktps,e2e_latency_avg_ms,e2e_latency_p50_ms,e2e_latency_p95_ms,e2e_latency_p99_ms,num_completed,status\n' > "${PER_RUN_FILE}"
 
-# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
+# AE: run a fixed 5-view warm-up before each measurement point and discard
 # the result.  The warm-up is intentionally not configurable so that the paper
 # parameters remain the only thing that controls the measurement.
 warmup_one() {
@@ -100,7 +95,7 @@ warmup_one() {
     (
         cd "${REPO}"
         python3 run.py "--${flag}" \
-            --sgx-mode HW \
+            --sgx-mode "${SGX_MODE}" \
             --experiment-number 3 \
             --batchsize 400 \
             --payload "${payload_size}" \
@@ -118,7 +113,8 @@ warmup_one() {
             --kv-del-ratio 0 \
             --kv-keyspace 10000 \
             --kv-value-len "${kv_value_length}"
-    ) >/dev/null 2>&1 || true   # warm-up failures are non-fatal
+    ) > "${run_log_dir}/warmup.log" 2>&1
+    : > "${STATS_FILE}"
 }
 
 run_one() {
@@ -133,17 +129,15 @@ run_one() {
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
 
-    # AE (§三): 5-view warm-up before the measured run
-    warmup_one "${flag}" "${protocol}" "${num_clients}"
+    warmup_one "${flag}" "${protocol}" "${num_clients}" || { echo "ERROR: warm-up failed; see ${run_log_dir}/warmup.log" >&2; return 1; }
 
     echo "[$(date --iso-8601=seconds)] START ${tag} (clients=${num_clients})"
 
     (
         cd "${REPO}"
-        # P0-2: pass --sgx-mode HW for cloud paper runs
-        # AE FIX (§7.6): payload=1100, kv-value-len=1024 — see variable definitions above
+        # AE FIX (paper section 7.6): payload=1100, kv-value-len=1024; see definitions above.
         python3 run.py "--${flag}" \
-            --sgx-mode HW \
+            --sgx-mode "${SGX_MODE}" \
             --experiment-number 3 \
             --batchsize 400 \
             --payload "${payload_size}" \
@@ -206,7 +200,9 @@ for i in "${!protocol_flags[@]}"; do
     done
 done
 
-python3 "${SCRIPT_DIR}/summarize_e2e.py" aggregate "${PER_RUN_FILE}" "${STATS_FILE}"
+# AE FIX: retain every repetition, including failures, and propagate aggregation errors.
+cp "${PER_RUN_FILE}" "${RESULT_DIR}/per-run.csv" || exit 1
+python3 "${SCRIPT_DIR}/summarize_e2e.py" aggregate "${PER_RUN_FILE}" "${STATS_FILE}" || exit 1
 total_runs=$(( ${#protocol_flags[@]} * ${#load_sweep_clients[@]} * repeats ))
 echo "Experiment 3 complete: $((total_runs - failed))/${total_runs} succeeded; statistics=${STATS_FILE}"
 (( failed == 0 ))
