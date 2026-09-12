@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """Generate a standalone HTML report from a run directory.
 
 Usage: python3 gen_report.py <run_dir>
@@ -131,6 +133,11 @@ def _parse_stats(stats_file: Path) -> list[dict]:
                 if "=" in token:
                     k, v = token.split("=", 1)
                     row[k.strip()] = v.strip()
+        elif len(parts) >= 3:
+            # Figure 3/4 sweep scripts write: label, throughput, latency.
+            row["label"] = parts[0]
+            row["thr_view"] = parts[1]
+            row["lat_view"] = parts[2]
         rows.append(row)
     return rows
 
@@ -165,8 +172,7 @@ def _check_ordering(measured_avgs: dict, expected_order: list[list[str]]) -> tup
 # ---------------------------------------------------------------------------
 # Per-figure data summary (for claim cards and summary section)
 # ---------------------------------------------------------------------------
-def _fig3_summary(ref: dict) -> dict:
-    stats_file = REPO / "experiments_reproduction" / "experiment1" / "stats.txt"
+def _fig3_summary(ref: dict, stats_file: Path) -> dict:
     rows = _parse_stats(stats_file)
     if not rows:
         return {"status": "no_data"}
@@ -191,8 +197,7 @@ def _fig3_summary(ref: dict) -> dict:
             "avg_thr": avg_thr, "rows": rows, "ref": ref}
 
 
-def _fig4_summary(ref: dict) -> dict:
-    stats_file = REPO / "experiments_reproduction" / "experiment2" / "stats.txt"
+def _fig4_summary(ref: dict, stats_file: Path) -> dict:
     rows = _parse_stats(stats_file)
     if not rows:
         return {"status": "no_data"}
@@ -222,8 +227,7 @@ def _fig4_summary(ref: dict) -> dict:
             "avg_thr": avg_thr, "s1_f32": s1_f32_measured, "rows": rows, "ref": ref}
 
 
-def _fig6_summary(ref: dict) -> dict:
-    stats_file = REPO / "experiments_reproduction" / "experiment3" / "stats.txt"
+def _fig6_summary(ref: dict, stats_file: Path) -> dict:
     rows = _parse_stats(stats_file)
     if not rows:
         return {"status": "no_data"}
@@ -554,9 +558,9 @@ def build_report(run_dir: Path) -> str:
 
     # Load summaries
     summaries = {
-        "fig3": _fig3_summary(_load_reference("fig3")),
-        "fig4": _fig4_summary(_load_reference("fig4")),
-        "fig6": _fig6_summary(_load_reference("fig6")),
+        "fig3": _fig3_summary(_load_reference("fig3"), run_dir / "stats" / "fig3.txt"),
+        "fig4": _fig4_summary(_load_reference("fig4"), run_dir / "stats" / "fig4.txt"),
+        "fig6": _fig6_summary(_load_reference("fig6"), run_dir / "stats" / "fig6.txt"),
     }
 
     FIG_TITLES = {
@@ -825,11 +829,14 @@ def main():
     for fig, exp in EXP_MAP.items():
         plot_script = REPO / "scripts" / f"plot_{fig}.py"
         if plot_script.exists():
-            stats_file = REPO / "experiments_reproduction" / exp / "stats.txt"
+            stats_file = run_dir / "stats" / f"{fig}.txt"
             if stats_file.exists():
                 env = os.environ.copy()
                 env["AE_RUN_DIR"] = str(run_dir)
-                subprocess.call([sys.executable, str(plot_script)], env=env)
+                env["AE_STATS_FILE"] = str(stats_file)
+                rc = subprocess.call([sys.executable, str(plot_script)], env=env)
+                if rc != 0:
+                    print(f"Plot generation failed for {fig} (exit {rc})", file=sys.stderr)
 
     html = build_report(run_dir)
     out = run_dir / "index.html"

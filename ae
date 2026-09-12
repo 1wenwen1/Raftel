@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """Raftel Artifact Evaluation CLI.
 
 Usage:
@@ -34,6 +36,11 @@ PLOT_SCRIPTS = {
     "fig4": REPO / "scripts" / "plot_fig4.py",
     "fig6": REPO / "scripts" / "plot_fig6.py",
 }
+STATS_FILES = {
+    "fig3": REPO / "experiments_reproduction" / "experiment1" / "stats.txt",
+    "fig4": REPO / "experiments_reproduction" / "experiment2" / "stats.txt",
+    "fig6": REPO / "experiments_reproduction" / "experiment3" / "stats.txt",
+}
 REPORT_SCRIPT = REPO / "scripts" / "gen_report.py"
 
 # Mini-scale overrides: reduced fault values for quick smoke/trend check
@@ -62,7 +69,8 @@ def latest_run_id() -> str | None:
     if not RUNS_DIR.exists():
         return None
     runs = sorted(
-        (d.name for d in RUNS_DIR.iterdir() if d.is_dir()),
+        (d.name for d in RUNS_DIR.iterdir()
+         if d.is_dir() and (d / "manifest.json").is_file()),
         reverse=True,
     )
     return runs[0] if runs else None
@@ -265,11 +273,20 @@ def cmd_run(args) -> int:
     failed_figs = []
     for fig in figs:
         script = SCRIPTS[fig]
+        stats_file = STATS_FILES[fig]
+        # Never attach a previous run's statistics when this invocation fails
+        # before the experiment script has a chance to truncate stats.txt.
+        if stats_file.exists():
+            stats_file.unlink()
         print(f"\n{'='*60}")
         print(f"  Running {fig} (scale={scale})")
         print(f"{'='*60}")
         log_event(rd, {"event": "fig_start", "fig": fig})
         rc = subprocess.call(["bash", str(script)], env=env, cwd=str(REPO))
+        if stats_file.exists():
+            stats_dir = rd / "stats"
+            stats_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(stats_file, stats_dir / f"{fig}.txt")
         log_event(rd, {"event": "fig_end", "fig": fig, "exit": rc})
         if rc != 0:
             print(f"  {fig}: FAILED (exit {rc})")

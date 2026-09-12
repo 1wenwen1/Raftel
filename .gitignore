@@ -64,7 +64,7 @@ task.json
 *.orig
 
 # Work in progress
-# scripts/ intentionally tracked for AE plot and report scripts
+scripts/
 
 # Ali Cloud credentials and runtime state stay local.
 aliyun/config*.json

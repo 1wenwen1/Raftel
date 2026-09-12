@@ -35,7 +35,7 @@ See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appe
 - hiredis + Redis (for experiment 3): `sudo apt-get install -y libhiredis-dev redis-server`
 - SSH private key `TShard` at `/root/Raftel/TShard` (reviewers: distributed via HotCRP)
 
-Instance counts needed: Figure 3 up to 97 (f=32), Figure 4 up to 49 (f=16), Figure 6 exactly 25 (f=8).
+Instance counts needed for one replica per host: Figure 3 up to 97 (f=32), Figure 4 up to 97 (f=32), Figure 6 exactly 25 (f=8).
 
 ---
 
@@ -54,7 +54,7 @@ The authors have set up a coordinator ECS with the cluster already running. Use 
 ./ae report
 ```
 
-Open `runs/<RUN_ID>/index.html` to see the reproduced figures with PASS/WARN/FAIL verdicts against reference values, experiment parameters, paper claim descriptions, and a checksums audit trail.
+Open `runs/<RUN_ID>/index.html` to see the reproduced figures, comparisons against reference values, experiment parameters, paper claim descriptions, and a checksums audit trail. Apply the documented PASS/WARN/FAIL thresholds when interpreting those comparisons.
 
 For a faster trend check (~30 min, reduced scale):
 
@@ -122,7 +122,7 @@ Reference values are in `runs/reference/fig{3,4,6}.csv`; PASS/WARN/FAIL criteria
 | Figure 4 | LAN TEE configs | `experiments_reproduction/experiment2/script/run_lan.sh` | `experiment2/stats.txt` |
 | Figure 6 | Redis E2E WAN | `experiments_reproduction/experiment3/script/run_redis_wan.sh` | `experiment3/stats.txt` |
 
-All scripts accept `AE_FAULT_VALUES`, `AE_LOAD_CLIENTS`, `AE_REPEATS` environment variables for the `--scale mini` mode. Scripts pass `--sgx-mode HW` to `run.py` for all cloud runs.
+The Figure 3/4 scripts accept `AE_FAULT_VALUES`; the Figure 6 script accepts `AE_LOAD_CLIENTS` and `AE_REPEATS`. The AE CLI sets these variables for `--scale mini`. Scripts pass `--sgx-mode HW` to `run.py` for all cloud runs.
 
 ---
 
@@ -142,7 +142,7 @@ Each `./ae run` creates `runs/<RUN_ID>/` with:
 - `events.jsonl` — timestamped event log
 - `checksums.txt` — SHA256 of all scripts and `run.py`
 - `figures/` — auto-generated PDFs
-- `index.html` — standalone HTML report with PASS/WARN/FAIL
+- `index.html` — standalone HTML report with reference comparisons and ordering checks
 
 ---
 

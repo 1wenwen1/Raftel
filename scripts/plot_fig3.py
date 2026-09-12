@@ -128,7 +128,10 @@ def plot_fig3(stats_file: Path, out_pdf: Path) -> None:
 
 def main():
     repo = Path(__file__).resolve().parent.parent
-    stats_file = repo / "experiments_reproduction" / "experiment1" / "stats.txt"
+    stats_file = Path(os.environ.get(
+        "AE_STATS_FILE",
+        repo / "experiments_reproduction" / "experiment1" / "stats.txt",
+    ))
     if not stats_file.exists():
         print(f"ERROR: stats file not found: {stats_file}", file=sys.stderr)
         sys.exit(1)

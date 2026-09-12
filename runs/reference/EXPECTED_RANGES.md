@@ -13,11 +13,15 @@ Replace with author-provided exact values when available.
 
 ## Required Orderings
 
-**Fig 3 throughput:** Achilles ≥ Chained ≥ Raftel > Hotstuff ≈ Raftel-Worst  
-**Fig 3 latency:** Raftel ≤ Chained < Basic-Damysus < Hotstuff ≈ Raftel-Worst  
-**Fig 4 throughput:** S1 > S2 ≥ S3 > S4  
-**Fig 4 latency:** S1 ≤ S2 ≤ S3 ≤ S4  
-**Fig 6 peak throughput:** Achilles ≥ Chained ≥ Raftel > Hotstuff  
+**Fig 3 throughput:** Achilles ≥ Chained ≥ Raftel > Hotstuff ≈ Raftel-Worst
+
+**Fig 3 latency:** Raftel ≤ Chained < Basic-Damysus < Hotstuff ≈ Raftel-Worst
+
+**Fig 4 throughput:** S1 > S2 ≥ S3 > S4
+
+**Fig 4 latency:** S1 ≤ S2 ≤ S3 ≤ S4
+
+**Fig 6 peak throughput:** Achilles ≥ Chained ≥ Raftel > Hotstuff
 
 ## Paper-Exact Values (from paper text)
 

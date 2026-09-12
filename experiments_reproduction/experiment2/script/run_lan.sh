@@ -15,7 +15,7 @@ IP_LIST_FILE="${REPO}/ip_list"
 STATS_FILE="${EXP_DIR}/stats.txt"
 
 sets=(set1 set2 set3 set4)
-fault_values=(1 2 4 8 16 32)
+read -r -a fault_values <<< "${AE_FAULT_VALUES:-1 2 4 8 16 32}"
 total_runs=$(( ${#sets[@]} * ${#fault_values[@]} ))
 
 if [[ ! -f "${SSH_KEY}" ]]; then
@@ -83,7 +83,7 @@ warmup_one() {
             --views 5 \
             --leader-mode fixed \
             --leader-id "${leader_id}"
-    ) >/dev/null 2>&1 || true   # warm-up failures are non-fatal
+    )
 }
 
 run_one() {
@@ -109,7 +109,11 @@ run_one() {
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
 
     # AE (§三): 5-view warm-up before the measured run
-    warmup_one "${set_name}" "${faults}" "${totaltee}" "${leader_id}"
+    if ! warmup_one "${set_name}" "${faults}" "${totaltee}" "${leader_id}" \
+        >"${run_log_dir}/warmup.log" 2>&1; then
+        echo "ERROR: warm-up failed for ${label}; measurement skipped" >&2
+        return 1
+    fi
 
     echo "[$(date --iso-8601=seconds)] START ${label}: totaltee=${totaltee}, leader=${leader_id}"
 

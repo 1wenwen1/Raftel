@@ -17,12 +17,12 @@ PER_RUN_FILE="$(mktemp)"
 
 protocol_flags=(p0 p1 p2 p3 p4)
 protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus)
-repeats=3
+repeats="${AE_REPEATS:-3}"
 faults=8
 requested_totaltee=9
 # P0-5: load sweep — run at multiple client counts to produce a throughput-latency curve.
 # Paper Figure 6 shows a curve, not a single point.
-load_sweep_clients=(1 2 4 8 16 32)
+read -r -a load_sweep_clients <<< "${AE_LOAD_CLIENTS:-1 2 4 8 16 32}"
 # AE FIX (§7.6): paper specifies "1 KB values" (kv-value-len=1024).
 # KVAppCodec::encode requires klen + vlen + 14 ≤ PAYLOAD_SIZE.
 # keyspace=10000 → key max 5 chars; 5+1024+14=1043, so PAYLOAD_SIZE must be ≥1043.
@@ -118,7 +118,7 @@ warmup_one() {
             --kv-del-ratio 0 \
             --kv-keyspace 10000 \
             --kv-value-len "${kv_value_length}"
-    ) >/dev/null 2>&1 || true   # warm-up failures are non-fatal
+    )
 }
 
 run_one() {
@@ -134,7 +134,11 @@ run_one() {
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
 
     # AE (§三): 5-view warm-up before the measured run
-    warmup_one "${flag}" "${protocol}" "${num_clients}"
+    if ! warmup_one "${flag}" "${protocol}" "${num_clients}" \
+        >"${run_log_dir}/warmup.log" 2>&1; then
+        echo "ERROR: warm-up failed for ${tag}; measurement skipped" >&2
+        return 1
+    fi
 
     echo "[$(date --iso-8601=seconds)] START ${tag} (clients=${num_clients})"
 

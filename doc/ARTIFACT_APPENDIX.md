@@ -54,7 +54,7 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 
 Maximum instance counts by figure:
 - Figure 3: up to 97 instances (f=32, 3×32+1 replicas).
-- Figure 4: up to 49 instances (f=16).
+- Figure 4: up to 97 instances (f=32).
 - Figure 6: 25 instances (n = 3×8+1).
 
 ---
@@ -105,7 +105,7 @@ protocols is consistent with the paper and absolute values fall within the
 ./ae report                    # generate figures + HTML report
 ```
 
-Open `runs/<RUN_ID>/index.html` for reproduced figures with PASS/WARN/FAIL verdicts.
+Open `runs/<RUN_ID>/index.html` for reproduced figures, reference comparisons, and ordering checks. Apply the documented thresholds to determine PASS/WARN/FAIL.
 
 ### Path B — Reviewer's own Alibaba Cloud account
 
@@ -123,7 +123,7 @@ cp aliyun/config.example.json aliyun/config.json   # edit with your account
 ./ae report
 ```
 
-### Reduced-scale check (~30 min, SIM mode)
+### Reduced-scale cloud check (~30 min, HW mode)
 
 ```
 ./ae run all --scale mini

@@ -11,8 +11,8 @@
 # this image does not turn one into one.
 #
 #   docker build -f deployment/Dockerfile -t raftel-ae .
-#   docker run --rm -it raftel-ae ./ae doctor --local
-#   docker run --rm -it raftel-ae ./ae run fig3 --local --faults 1
+#   docker run --rm -it raftel-ae ./ae doctor --profile smoke
+#   docker run --rm -it raftel-ae ./ae smoke
 
 FROM ubuntu:20.04
 

@@ -16,7 +16,7 @@ STATS_FILE="${EXP_DIR}/stats.txt"
 
 protocol_flags=(p0 p1 p2 p3 p4 p0)
 protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus Raftel-Worst)
-fault_values=(1 2 4 8 16 32)
+read -r -a fault_values <<< "${AE_FAULT_VALUES:-1 2 4 8 16 32}"
 total_runs=$(( ${#protocol_flags[@]} * ${#fault_values[@]} ))
 
 if [[ ! -f "${SSH_KEY}" ]]; then
@@ -98,7 +98,7 @@ warmup_one() {
             --repeats 1 \
             --views 5 \
             "${protocol_args[@]}"
-    ) >/dev/null 2>&1 || true   # warm-up failures are non-fatal
+    )
 }
 
 run_one() {
@@ -126,7 +126,11 @@ run_one() {
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
 
     # AE (§三): 5-view warm-up before the measured run
-    warmup_one "${flag}" "${protocol}" "${faults}"
+    if ! warmup_one "${flag}" "${protocol}" "${faults}" \
+        >"${run_log_dir}/warmup.log" 2>&1; then
+        echo "ERROR: warm-up failed for ${tag}; measurement skipped" >&2
+        return 1
+    fi
 
     echo "[$(date --iso-8601=seconds)] START ${tag}"
 

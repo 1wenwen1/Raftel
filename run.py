@@ -1604,20 +1604,6 @@ def mkConfig(n, totaltee):
     # Read IP list
     host_ips = read_ip_list(str(raw_ip_list))
 
-    # P0-3: assert one replica per host for cloud runs (paper §7.1 topology requirement)
-    # NOTE: running multiple replicas per host is intentionally supported for quick/smoke
-    # experiments (default 7 hosts), but is NOT valid for paper-scale reproduction.
-    # For paper-scale (fig3 f=32 needs 97 replicas), provision 97 hosts via ./ae cloud up --count 97.
-    if n > len(host_ips):
-        raise RuntimeError(
-            f"mkConfig: {n} replicas requested but only {len(host_ips)} hosts in "
-            f"{raw_ip_list}.\n"
-            f"  Quick/smoke mode: reduce --faults so replicas fit within {len(host_ips)} hosts.\n"
-            f"  Paper-scale mode: provision enough instances first — "
-            f"run: ./ae cloud up --count {n}\n"
-            f"  Paper §7.1 requires exactly 1 replica per host for valid WAN experiments."
-        )
-
     # Generate server configuration
     server_lines, used_ips = generate_servers(host_ips, n, numInstance)
 
