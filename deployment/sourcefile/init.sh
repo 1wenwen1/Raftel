@@ -58,8 +58,8 @@ grep -qxF 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib' ~/.bashrc || 
 source ~/.bashrc
 
 
-sudo apt install -y cmake libuv1-dev libssl-dev
-python3 -m pip install pathlib matplotlib
+sudo apt install -y cmake libuv1-dev libssl-dev libhiredis-dev pkg-config python3-pip
+python3 -m pip install pathlib matplotlib paramiko scp aliyun-python-sdk-core
 source /opt/intel/sgxsdk/environment
 
 cd ~

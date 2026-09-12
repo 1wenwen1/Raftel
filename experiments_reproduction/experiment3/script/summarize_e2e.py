@@ -37,6 +37,12 @@ def read_run(stats_dir: Path):
     if not all(all(key in client for key in required_window) for client in clients):
         raise RuntimeError("client E2E files lack completion/reply-window fields")
     completed = sum(client["num_completed"] for client in clients)
+
+    # P0-7: zero-completion runs are failures, not valid data points.
+    # The caller checks this and marks the row as failed.
+    if completed == 0:
+        raise RuntimeError("zero completions: all client requests failed or timed out")
+
     first_us = min(client["first_reply_unix_us"] for client in clients)
     last_us = max(client["last_reply_unix_us"] for client in clients)
     window_sec = (last_us - first_us) / 1_000_000.0
@@ -62,15 +68,18 @@ def aggregate(per_run_csv: Path, summary_csv: Path):
         for row in csv.DictReader(source):
             if row["status"] != "success":
                 continue
-            grouped.setdefault(row["protocol"], []).append(row)
+            # P0-5: group by (protocol, load_clients) for the throughput-latency curve
+            key = (row["protocol"], row.get("load_clients", ""))
+            grouped.setdefault(key, []).append(row)
 
     with open(summary_csv, "w", newline="", encoding="utf-8") as target:
         writer = csv.writer(target)
-        writer.writerow(("protocol", "successful_repeats", *METRICS))
-        for protocol in sorted(grouped):
-            rows = grouped[protocol]
+        writer.writerow(("protocol", "load_clients", "successful_repeats", *METRICS))
+        for (protocol, load_clients) in sorted(grouped):
+            rows = grouped[(protocol, load_clients)]
             writer.writerow((
                 protocol,
+                load_clients,
                 len(rows),
                 *(statistics.fmean(float(row[key]) for row in rows) for key in METRICS),
             ))

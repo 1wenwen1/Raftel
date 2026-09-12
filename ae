@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""Raftel Artifact Evaluation CLI.
+
+Usage:
+  ./ae doctor [--profile paper|smoke]
+  ./ae smoke
+  ./ae run <fig3|fig4|fig6|all> [--scale full|mini]
+  ./ae report [RUN_ID]
+  ./ae status [RUN_ID]
+  ./ae cloud <up|init|check|down> [--count N]
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent
+RUNS_DIR = REPO / "runs"
+ALIYUN_DIR = REPO / "aliyun"
+DEPLOYMENT_DIR = REPO / "deployment"
+SCRIPTS = {
+    "fig3": REPO / "experiments_reproduction" / "experiment1" / "script" / "run_wan.sh",
+    "fig4": REPO / "experiments_reproduction" / "experiment2" / "script" / "run_lan.sh",
+    "fig6": REPO / "experiments_reproduction" / "experiment3" / "script" / "run_redis_wan.sh",
+}
+PLOT_SCRIPTS = {
+    "fig3": REPO / "scripts" / "plot_fig3.py",
+    "fig4": REPO / "scripts" / "plot_fig4.py",
+    "fig6": REPO / "scripts" / "plot_fig6.py",
+}
+REPORT_SCRIPT = REPO / "scripts" / "gen_report.py"
+
+# Mini-scale overrides: reduced fault values for quick smoke/trend check
+MINI_SCALE_ENV = {
+    "AE_SCALE": "mini",
+    "AE_FAULT_VALUES": "1 2 4",        # subset of the full f sweep
+    "AE_LOAD_CLIENTS": "1 4 16",       # subset of Fig6 load sweep
+    "AE_REPEATS": "1",
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def run_id_new() -> str:
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return ts
+
+
+def run_dir(run_id: str) -> Path:
+    return RUNS_DIR / run_id
+
+
+def latest_run_id() -> str | None:
+    if not RUNS_DIR.exists():
+        return None
+    runs = sorted(
+        (d.name for d in RUNS_DIR.iterdir() if d.is_dir()),
+        reverse=True,
+    )
+    return runs[0] if runs else None
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_manifest(run_dir: Path, data: dict) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with open(run_dir / "manifest.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def update_manifest(run_dir: Path, updates: dict) -> None:
+    manifest_path = run_dir / "manifest.json"
+    manifest = {}
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    manifest.update(updates)
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def log_event(run_dir: Path, event: dict) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    event["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with open(run_dir / "events.jsonl", "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+
+def git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(REPO), text=True
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def checksum_scripts(figs: list[str]) -> dict:
+    result = {}
+    for fig in figs:
+        script = SCRIPTS.get(fig)
+        if script and script.exists():
+            result[str(script.relative_to(REPO))] = sha256_file(script)
+    run_py = REPO / "run.py"
+    if run_py.exists():
+        result["run.py"] = sha256_file(run_py)
+    return result
+
+
+def read_ip_list() -> list[str]:
+    ip_file = REPO / "ip_list"
+    if not ip_file.exists():
+        return []
+    with open(ip_file) as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_doctor(args) -> int:
+    """Check environment and flag blockers."""
+    profile = getattr(args, "profile", "smoke")
+    ok = True
+
+    print(f"=== Raftel AE doctor (profile={profile}) ===")
+
+    # SGX SDK
+    sgxsdk = Path("/opt/intel/sgxsdk")
+    if sgxsdk.exists():
+        print(f"  [OK] SGX SDK found at {sgxsdk}")
+    else:
+        print(f"  [WARN] SGX SDK not found at {sgxsdk} — needed for cloud HW runs")
+        if profile == "paper":
+            ok = False
+
+    # Python packages
+    for pkg in ("paramiko", "scp"):
+        try:
+            __import__(pkg)
+            print(f"  [OK] Python package: {pkg}")
+        except ImportError:
+            print(f"  [FAIL] Missing Python package: {pkg}  (pip install {pkg})")
+            ok = False
+
+    # salticidae submodule
+    sal = REPO / "salticidae" / "include" / "salticidae"
+    if sal.exists():
+        print(f"  [OK] salticidae submodule present")
+    else:
+        print(f"  [FAIL] salticidae submodule missing — run: git submodule update --init")
+        ok = False
+
+    # SSH key
+    tshard = REPO / "TShard"
+    if tshard.exists():
+        mode = oct(tshard.stat().st_mode)[-3:]
+        if mode in ("600", "400"):
+            print(f"  [OK] SSH key TShard (permissions {mode})")
+        else:
+            print(f"  [WARN] SSH key TShard has loose permissions {mode} — run: chmod 600 TShard")
+    else:
+        print(f"  [WARN] SSH key TShard not found — required for cloud runs")
+
+    # Aliyun config
+    ali_cfg = ALIYUN_DIR / "config.json"
+    if ali_cfg.exists():
+        print(f"  [OK] aliyun/config.json present")
+    else:
+        print(f"  [WARN] aliyun/config.json missing — copy from aliyun/config.example.json and fill in credentials")
+        if profile == "paper":
+            ok = False
+
+    # ip_list for cloud runs
+    if profile == "paper":
+        ips = read_ip_list()
+        if ips:
+            print(f"  [OK] ip_list: {len(ips)} host(s) configured")
+        else:
+            print(f"  [FAIL] ip_list is empty or missing — run: ./ae cloud up && ./ae cloud init")
+            ok = False
+
+    # git state
+    commit = git_commit()
+    print(f"  [INFO] git commit: {commit}")
+
+    if ok:
+        print("\ndoctor: all checks passed")
+        return 0
+    else:
+        print("\ndoctor: one or more checks FAILED — fix above before running experiments")
+        return 1
+
+
+def cmd_smoke(args) -> int:
+    """Run a local 4-node SIM-mode smoke test (~5 min)."""
+    print("=== Raftel AE smoke test (local SIM mode, f=1, p0) ===")
+    rc = subprocess.call(
+        [
+            sys.executable, "run.py",
+            "--p0", "--local",
+            "--faults", "1",
+            "--totaltee", "2",
+            "--views", "5",
+            "--cl-trans", "100",
+        ],
+        cwd=str(REPO),
+    )
+    if rc == 0:
+        print("smoke: PASSED")
+    else:
+        print(f"smoke: FAILED (exit {rc})")
+    return rc
+
+
+def cmd_run(args) -> int:
+    """Run one or all experiments and produce a run directory."""
+    figs = ["fig3", "fig4", "fig6"] if args.fig == "all" else [args.fig]
+    scale = getattr(args, "scale", "full")
+    run_id = run_id_new()
+    rd = run_dir(run_id)
+    rd.mkdir(parents=True, exist_ok=True)
+
+    ips = read_ip_list()
+    manifest = {
+        "run_id": run_id,
+        "git_commit": git_commit(),
+        "figs": figs,
+        "scale": scale,
+        "cluster_ips": ips,
+        "status": "running",
+        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    write_manifest(rd, manifest)
+    log_event(rd, {"event": "run_start", "figs": figs, "scale": scale})
+
+    # Write checksums of all scripts used
+    checksums = checksum_scripts(figs)
+    with open(rd / "checksums.txt", "w") as f:
+        for path, digest in sorted(checksums.items()):
+            f.write(f"{digest}  {path}\n")
+
+    # Build environment for sub-scripts
+    env = os.environ.copy()
+    env["AE_RUN_ID"] = run_id
+    env["AE_RUN_DIR"] = str(rd)
+    if scale == "mini":
+        env.update(MINI_SCALE_ENV)
+
+    failed_figs = []
+    for fig in figs:
+        script = SCRIPTS[fig]
+        print(f"\n{'='*60}")
+        print(f"  Running {fig} (scale={scale})")
+        print(f"{'='*60}")
+        log_event(rd, {"event": "fig_start", "fig": fig})
+        rc = subprocess.call(["bash", str(script)], env=env, cwd=str(REPO))
+        log_event(rd, {"event": "fig_end", "fig": fig, "exit": rc})
+        if rc != 0:
+            print(f"  {fig}: FAILED (exit {rc})")
+            failed_figs.append(fig)
+        else:
+            print(f"  {fig}: OK")
+
+    status = "failed" if failed_figs else "complete"
+    update_manifest(rd, {
+        "status": status,
+        "failed_figs": failed_figs,
+        "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    log_event(rd, {"event": "run_end", "status": status, "failed_figs": failed_figs})
+
+    print(f"\nRun ID: {run_id}")
+    print(f"Run dir: {rd}")
+    if failed_figs:
+        print(f"FAILED figs: {failed_figs}")
+        return 1
+    print("All experiments complete.")
+    print(f"\nNext: ./ae report {run_id}")
+    return 0
+
+
+def cmd_report(args) -> int:
+    """Generate figures and HTML report from a run directory."""
+    run_id = getattr(args, "run_id", None) or latest_run_id()
+    if not run_id:
+        print("No run found. Run: ./ae run all", file=sys.stderr)
+        return 1
+    rd = run_dir(run_id)
+    if not rd.exists():
+        print(f"Run directory not found: {rd}", file=sys.stderr)
+        return 1
+
+    print(f"=== Generating report for run {run_id} ===")
+
+    if REPORT_SCRIPT.exists():
+        rc = subprocess.call([sys.executable, str(REPORT_SCRIPT), str(rd)])
+        if rc != 0:
+            print(f"Report generation failed (exit {rc})")
+            return rc
+    else:
+        print(f"[WARN] {REPORT_SCRIPT} not yet implemented — run plots manually")
+
+    report_html = rd / "index.html"
+    if report_html.exists():
+        print(f"\nReport: {report_html}")
+    return 0
+
+
+def cmd_status(args) -> int:
+    """Show status of a run."""
+    run_id = getattr(args, "run_id", None) or latest_run_id()
+    if not run_id:
+        print("No runs found.")
+        return 0
+    rd = run_dir(run_id)
+    manifest_path = rd / "manifest.json"
+    if not manifest_path.exists():
+        print(f"Run {run_id}: manifest not found")
+        return 1
+    with open(manifest_path) as f:
+        m = json.load(f)
+    print(f"Run ID  : {m.get('run_id')}")
+    print(f"Status  : {m.get('status')}")
+    print(f"Scale   : {m.get('scale')}")
+    print(f"Figs    : {m.get('figs')}")
+    print(f"Started : {m.get('started_at')}")
+    print(f"Finished: {m.get('finished_at', 'still running?')}")
+    if m.get("failed_figs"):
+        print(f"FAILED  : {m.get('failed_figs')}")
+    return 0
+
+
+def cmd_cloud(args) -> int:
+    """Manage the Aliyun cluster lifecycle."""
+    action = args.action
+
+    if action == "up":
+        count = getattr(args, "count", None)
+        script = ALIYUN_DIR / "create_run_instances.py"
+        if not script.exists():
+            print(f"Not found: {script}", file=sys.stderr)
+            return 1
+        cmd = [sys.executable, str(script)]
+        if count:
+            cmd += ["--count", str(count)]
+        rc = subprocess.call(cmd, cwd=str(REPO))
+        if rc != 0:
+            return rc
+        wait_script = ALIYUN_DIR / "wait_instances_ready.py"
+        if wait_script.exists():
+            rc = subprocess.call([sys.executable, str(wait_script)], cwd=str(REPO))
+        return rc
+
+    elif action == "init":
+        deploy = DEPLOYMENT_DIR / "cloud_deploy.sh"
+        config_sh = DEPLOYMENT_DIR / "cloud_config.sh"
+        for script in (deploy, config_sh):
+            if not script.exists():
+                print(f"Not found: {script}", file=sys.stderr)
+                return 1
+            rc = subprocess.call(["bash", str(script)], cwd=str(REPO))
+            if rc != 0:
+                return rc
+        return 0
+
+    elif action == "check":
+        ips = read_ip_list()
+        if not ips:
+            print("ip_list is empty — run: ./ae cloud up && ./ae cloud init")
+            return 1
+        print(f"Checking {len(ips)} host(s)...")
+        ssh_key = REPO / "TShard"
+        all_ok = True
+        for ip in ips:
+            check_cmd = (
+                "test -c /dev/sgx_enclave && echo sgx:ok || echo sgx:MISSING; "
+                "test -d /opt/intel/sgxsdk && echo sdk:ok || echo sdk:MISSING; "
+                "command -v redis-server >/dev/null && echo redis:ok || echo redis:MISSING; "
+                # AE (§六): hiredis is required for experiment3 Redis builds; check both
+                # the header (libhiredis-dev) and the shared library.
+                "pkg-config --exists hiredis 2>/dev/null && echo hiredis:ok || "
+                "  (test -f /usr/include/hiredis/hiredis.h && echo hiredis:ok || echo hiredis:MISSING); "
+                "test -f /usr/local/lib/libsalticidae.a && echo salticidae:ok || echo salticidae:MISSING"
+            )
+            result = subprocess.run(
+                ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
+                 f"root@{ip}", check_cmd],
+                capture_output=True, text=True,
+            )
+            status = result.stdout.strip().replace("\n", "  ")
+            if "MISSING" in status:
+                print(f"  [{ip}] FAIL: {status}")
+                all_ok = False
+            else:
+                print(f"  [{ip}] OK: {status}")
+        return 0 if all_ok else 1
+
+    elif action == "down":
+        script = ALIYUN_DIR / "delete_instances.py"
+        if not script.exists():
+            print(f"Not found: {script}", file=sys.stderr)
+            return 1
+        print("WARNING: this will release all Aliyun ECS instances. Press Ctrl-C to abort.")
+        try:
+            input("Press Enter to continue...")
+        except KeyboardInterrupt:
+            print("\nAborted.")
+            return 0
+        return subprocess.call([sys.executable, str(script)], cwd=str(REPO))
+
+    else:
+        print(f"Unknown cloud action: {action}", file=sys.stderr)
+        return 1
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="ae",
+        description="Raftel Artifact Evaluation CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # doctor
+    p_doctor = sub.add_parser("doctor", help="Check environment")
+    p_doctor.add_argument("--profile", choices=("paper", "smoke"), default="smoke")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    # smoke
+    p_smoke = sub.add_parser("smoke", help="Quick local SIM test (~5 min)")
+    p_smoke.set_defaults(func=cmd_smoke)
+
+    # run
+    p_run = sub.add_parser("run", help="Run experiment(s)")
+    p_run.add_argument("fig", choices=("fig3", "fig4", "fig6", "all"))
+    p_run.add_argument("--scale", choices=("full", "mini"), default="full",
+                       help="full=paper scale (hours); mini=reduced scale for trend check (~30 min)")
+    p_run.set_defaults(func=cmd_run)
+
+    # report
+    p_report = sub.add_parser("report", help="Generate figures and HTML report")
+    p_report.add_argument("run_id", nargs="?", default=None)
+    p_report.set_defaults(func=cmd_report)
+
+    # status
+    p_status = sub.add_parser("status", help="Show run status")
+    p_status.add_argument("run_id", nargs="?", default=None)
+    p_status.set_defaults(func=cmd_status)
+
+    # cloud
+    p_cloud = sub.add_parser("cloud", help="Manage Aliyun cluster")
+    p_cloud.add_argument("action", choices=("up", "init", "check", "down"))
+    p_cloud.add_argument("--count", type=int, default=None,
+                         help="Number of ECS instances to provision (up only)")
+    p_cloud.set_defaults(func=cmd_cloud)
+
+    args = parser.parse_args()
+    sys.exit(args.func(args))
+
+
+if __name__ == "__main__":
+    main()
