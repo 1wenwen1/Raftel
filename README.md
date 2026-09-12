@@ -45,18 +45,42 @@ network, and SGX contention and are not equivalent to a one-replica-per-host set
 
 ## Path A — Pre-provisioned coordinator
 
-The authors have set up a coordinator ECS with the cluster already running. Use the SSH key from HotCRP:
+The authors provide a configured coordinator ECS, but the 7-node experiment
+cluster is not started in advance. The coordinator already contains the
+Alibaba Cloud configuration and the SSH private key distributed through
+HotCRP. From the coordinator, create the replica nodes and install their
+experiment environment before starting a run:
 
 ```bash
-# 1. Check that all nodes are ready (~1 min)
+# 1. Create 7 reusable SGX ECS nodes and wait until SSH is reachable
+./ae cloud up --count 7
+
+# 2. Synchronize the generated private IP list used by experiment scripts
+cp aliyun/priv_ip.txt ip_list
+
+# 3. Transfer the setup bundle and start environment installation on every node
+./ae cloud init
+
+# 4. Installation runs in background tmux sessions; monitor until all finish
+tmux list-sessions
+# To inspect one node: tmux attach -t setup1
+# Detach without stopping it: Ctrl-b, then d
+
+# 5. Verify SGX, SDK, Redis, hiredis, Salticidae, SSH, and coordinator setup
+./ae cloud check
 ./ae doctor --profile paper
 
-# 2. Run all three experiments (~4–6 h)
+# 6. Run all three cloud experiments (~4–6 h)
 ./ae run all
 
-# 3. Generate figures and HTML report
+# 7. Generate figures and the HTML report for the latest run
 ./ae report
 ```
+
+`./ae run all` does not create ECS instances or install the remote environment;
+it only compiles, deploys, starts, and measures servers on the nodes already
+listed in `ip_list`. Do not start the experiment until both checks above pass
+for all 7 nodes.
 
 Open `runs/<RUN_ID>/index.html` to see the reproduced figures, comparisons against reference values, experiment parameters, paper claim descriptions, and a checksums audit trail. Apply the documented PASS/WARN/FAIL thresholds when interpreting those comparisons.
 
