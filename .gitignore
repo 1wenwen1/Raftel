@@ -64,7 +64,7 @@ task.json
 *.orig
 
 # Work in progress
-scripts/
+# scripts/ intentionally tracked for AE plot and report scripts
 
 # Ali Cloud credentials and runtime state stay local.
 aliyun/config*.json
@@ -73,3 +73,18 @@ aliyun/*.txt
 aliyun/.env*
 aliyun/*.key
 aliyun/*.pem
+aliyun/*.pub
+aliyun/hosts.json
+aliyun/runner.json
+aliyun/cluster_plan.json
+TShard
+aliyun/config.json
+runs/*
+!runs/reference/
+!runs/reference/.gitkeep
+experiments_reproduction/*/results/*.pdf
+experiments_reproduction/*/results/*.png
+experiments_reproduction/*/stats.txt
+
+# AE process lock
+.ae.lock

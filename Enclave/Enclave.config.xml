@@ -2,7 +2,9 @@
 <EnclaveConfiguration>
   <ProdID>0</ProdID>
   <ISVSVN>0</ISVSVN>
-  <StackMaxSize>0x40000</StackMaxSize>
+  <!-- Fig. 6 carries 1 KiB values in 400-transaction blocks. The trusted
+       block representation is larger than the original 256 KiB stack. -->
+  <StackMaxSize>0x100000</StackMaxSize>
   <HeapMaxSize>0x100000</HeapMaxSize>
   <TCSNum>10</TCSNum>
   <TCSPolicy>1</TCSPolicy>

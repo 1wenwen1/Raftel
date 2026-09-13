@@ -10,12 +10,14 @@ OUT_DIR="${EXP_DIR}/out"
 RESULT_DIR="${EXP_DIR}/results"
 CURRENT_LOG_DIR="${LOG_DIR}/current"
 CURRENT_RESULT_DIR="${RESULT_DIR}/current"
-SSH_KEY="${REPO}/TShard"
-IP_LIST_FILE="${REPO}/ip_list"
+SSH_KEY="${RAFTEL_SSH_KEY:-${REPO}/TShard}"
+IP_LIST_FILE="${REPO}/aliyun/priv_ip.txt"
 STATS_FILE="${EXP_DIR}/stats.txt"
+SGX_MODE="${AE_SGX_MODE:-HW}"
 
 sets=(set1 set2 set3 set4)
-fault_values=(1 2 4 8 16 32)
+# AE FIX: honor the CLI scale override; defaults remain the paper sweep.
+read -r -a fault_values <<< "${AE_FAULT_VALUES:-1 2 4 8 16 32}"
 total_runs=$(( ${#sets[@]} * ${#fault_values[@]} ))
 
 if [[ ! -f "${SSH_KEY}" ]]; then
@@ -50,13 +52,36 @@ for dir in "${EXE_DIR}" "${LOG_DIR}" "${OUT_DIR}" "${RESULT_DIR}"; do
 done
 
 # LAN baseline: remove any netem/root qdisc left by a previous WAN experiment.
-echo "Removing existing root qdisc on ${#remote_ips[@]} remote host(s)..."
-for ip in "${remote_ips[@]}"; do
-    ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-        "sudo tc qdisc del dev eth0 root 2>/dev/null || true"
-done
+# AE FIX (network validation): verify netem is absent; do not silently ignore tc failures.
+python3 "${REPO}/scripts/network.py" lan || exit 1
 
 : > "${STATS_FILE}"
+
+# AE: run a fixed 5-view warm-up before each measurement point and discard
+# the result.  The warm-up is intentionally not configurable so that the paper
+# parameters remain the only thing that controls the measurement.
+warmup_one() {
+    local set_name="$1"
+    local faults="$2"
+    local totaltee="$3"
+    local leader_id="$4"
+
+    echo "[$(date --iso-8601=seconds)] WARMUP ${set_name}_f${faults} (5 views, result discarded)"
+    (
+        cd "${REPO}"
+        python3 run.py --p0 \
+            --sgx-mode "${SGX_MODE}" \
+            --experiment-number 2 \
+            --batchsize 400 \
+            --payload 256 \
+            --faults "${faults}" \
+            --totaltee "${totaltee}" \
+            --views 5 \
+            --leader-mode fixed \
+            --leader-id "${leader_id}"
+    ) > "${run_log_dir}/warmup.log" 2>&1
+    : > "${STATS_FILE}"
+}
 
 run_one() {
     local set_name="$1"
@@ -79,11 +104,15 @@ run_one() {
     esac
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
+
+    warmup_one "${set_name}" "${faults}" "${totaltee}" "${leader_id}" || { echo "ERROR: warm-up failed; see ${run_log_dir}/warmup.log" >&2; return 1; }
+
     echo "[$(date --iso-8601=seconds)] START ${label}: totaltee=${totaltee}, leader=${leader_id}"
 
     (
         cd "${REPO}"
         python3 run.py --p0 \
+            --sgx-mode "${SGX_MODE}" \
             --experiment-number 2 \
             --batchsize 400 \
             --payload 256 \

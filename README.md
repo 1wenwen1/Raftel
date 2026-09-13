@@ -1,359 +1,174 @@
 # Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World
 
-This repository contains the code accompanying the paper ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf), which was accepted to EuroSys 2027.
+Artifact for ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf), accepted at EuroSys 2027.
+
+Raftel is an SGX-TEE-assisted BFT consensus protocol for partially trusted environments, where only a subset of replicas holds a TEE. It builds on the [Damysus](https://github.com/vrahli/damysus) codebase and shows that a minority TEE quorum suffices for safety and liveness, with throughput and latency competitive with state-of-the-art TEE-free BFT protocols. This artifact reproduces Figures 3, 4, and 6 from the paper: WAN scalability across six protocols, LAN TEE-leader and quorum-size effects, and Redis end-to-end performance.
+
+See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appendix and [doc/AE_USAGE.md](doc/AE_USAGE.md) for the complete reviewer workflow.
+
+---
 
 ## Contents
 
-- [Current status](#current-status)
-- [Description](#description)
+- [Prerequisites](#prerequisites)
+- [Reviewer Workflow](#reviewer-workflow)
+- [Complete AE usage](doc/AE_USAGE.md)
+- [Reproducibility Scope](#reproducibility-scope)
+- [Figure → Script Mapping](#figure--script-mapping)
+- [AE CLI Reference](#ae-cli-reference)
 - [Dependencies](#dependencies)
-  - [Required versions](#required-versions)
-  - [System packages](#system-packages)
-  - [SGX kernel support](#sgx-kernel-support)
-  - [Intel SGX SDK](#intel-sgx-sdk)
-  - [Python packages](#python-packages)
-  - [Salticidae](#salticidae)
-- [Experiments](#experiments)
-  - [Local experiments](#local-experiments)
-    - [Minimal local test](#minimal-local-test)
-  - [Ali Cloud experiments](#ali-cloud-experiments)
-    - [Launch instances](#launch-instances)
-    - [Configure the nodes](#configure-the-nodes)
-    - [Run a cloud experiment](#run-a-cloud-experiment)
-    - [Experiments Reproduction](#experiments-reproduction)
+- [Code changes: Raftel vs. Damysus](doc/CODE_OVERVIEW.md)
+- [Troubleshooting](#troubleshooting)
 
-## Current status
+---
 
-The software is under ongoing development.
+## Prerequisites
 
-## Description
+> **⚠ SGX HARDWARE REQUIRED for paper runs.**
+> Every cloud node must be an Intel SGX-capable instance with `/dev/sgx_enclave` and `/dev/sgx_provision` present. The paper uses Alibaba Cloud `ecs.g7t.2xlarge` (8 vCPU / 32 GB, SGX-TEE enabled).
+> `--mode sim` runs the complete workflow in SGX simulation mode on
+> seven multiplexed hosts. It validates usability and result generation, but
+> it is not hardware evidence and cannot establish a paper performance claim.
 
-Raftel is an SGX-based, TEE-assisted Byzantine Fault Tolerance (BFT) protocol designed for partially trusted systems in which only a subset of replicas is equipped with a TEE. This implementation is built on top of the [Damysus](https://github.com/vrahli/damysus) codebase.
+- Ubuntu 20.04 x86-64 on coordinator and all replica nodes
+- Intel SGX SDK 2.23.100.2 (bundled in `deployment/sourcefile/archive.tar.gz`)
+- Python ≥ 3.8 with packages: `matplotlib paramiko scp`
+- Salticidae (Git submodule): `git submodule update --init && (cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)`
+- hiredis + Redis (for experiment 3): `sudo apt-get install -y libhiredis-dev redis-server`
+- An author-provided SSH credential on the pre-provisioned coordinator
 
-The implementation is organized as follows:
+Full paper topology needs up to 97 replica VMs for both Figures 3 and 4
+(f=32, 3f+1), and 25 for Figure 6 (f=8). Simulation mode uses seven hosts
+and maps up to 15 logical replicas to distinct ports on each host, so the full
+`f={1,2,4,8,16,32}` sweep (including `n=97`) remains available. Simulation
+results are explicitly labelled and are useful for pipeline and trend
+validation; Full is the SGX HW, one-replica-per-VM claim configuration.
 
-- `App/Handler.cpp` implements the host-side consensus logic, including message handling, protocol phases, quorum processing, and communication with the enclave.
-- `Enclave/EnclaveComb.cpp` implements the trusted operations for the basic Raftel protocol, including protocol-state transitions, proposal validation, signing, quorum-certificate validation, and vote accumulation.
-- `Enclave/EnclaveChComb.cpp` implements the trusted operations for Chained-Raftel.
-- `App/params.h` selects the protocol at compile time. Raftel and Chained-Raftel are enabled by the `BASIC_HYBRID_TEE` and `CHAINED_HYBRID_TEE` macros, respectively.
-- `run.py` generates the protocol parameters and node configuration, compiles the selected implementation, and orchestrates local or distributed experiments.
+---
+
+## Reviewer Workflow
+
+The authors provide a runner with the repository, SGX dependencies, and the
+cloud configuration/SSH credential outside this repository. Reviewers do not
+need an Alibaba Cloud account or any cloud credentials. If no replica inventory
+exists, either reviewer entry point creates and initializes its disposable
+replica cluster before starting measurements.
+
+```bash
+# Cost-saving complete sweep on seven hosts
+./ae run all --mode sim
+
+# Or: paper topology, one replica per VM
+./ae run all --mode full
+```
+
+Choose one command. Simulation runs all six fault points on seven hosts,
+with 97 logical replicas at `f=32`, and uses one Fig. 6 repeat. Its report is
+labelled as SGX SIM and is not eligible for hardware or full paper claims. Full
+uses SGX HW with the dedicated-VM topology, every paper fault point, and three
+Fig. 6 repeats. Each command automatically checks its environment, runs all
+experiments, plots the results, and writes a standalone
+`runs/<RUN_ID>/index.html` report. A cluster created by the command is released
+when the run ends; an existing author-prepared cluster is retained.
+
+---
+
+## Reproducibility Scope
+
+| Figure | Claim | Mode |
+|---|---|---|
+| Fig 3 (WAN scalability) | Achilles ≥ Chained ≥ Raftel > Damysus > HotStuff throughput; Raftel-Worst is comparable to HotStuff | Full reproduction: ±40% absolute PASS band and material ordering checks |
+| Fig 4 (LAN TEE configs) | S1 highest; S2 slightly outperforms S3; S4 lowest; S1 at f=32 = 31.5 kTPS | Full reproduction: same criteria; the original script's positional S2 mapping is preserved |
+| Fig 6 (Redis E2E WAN) | Achilles 95 TPS, Chained 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS (peak) | Full reproduction: same criteria |
+
+SGX enclave overhead and cloud network jitter may vary across AE windows. The
+artifact records deviations and applies the author-defined ±40% PASS band. The
+prototype does not implement remote attestation, as stated in paper §7.1.
+
+Author-supplied reference values are in `runs/reference/original/`;
+PASS/WARN/FAIL criteria are in `runs/reference/EXPECTED_RANGES.md`.
+
+---
+
+## Figure → Script Mapping
+
+| Figure | Experiment | Script | Output |
+|---|---|---|---|
+| Figure 3 | WAN scalability | `experiments_reproduction/experiment1/script/run_wan.sh` | `experiment1/stats.txt` |
+| Figure 4 | LAN TEE configs | `experiments_reproduction/experiment2/script/run_lan.sh` | `experiment2/stats.txt` |
+| Figure 6 | Redis E2E WAN | `experiments_reproduction/experiment3/script/run_redis_wan.sh` | `experiment3/stats.txt` |
+
+Simulation uses seven hosts, up to 15 replicas per host, all six fault points,
+SGX SIM, and one Fig. 6 repeat. Full keeps all paper fault points with one SGX HW
+replica per host.
+
+---
+
+## AE CLI Reference
+
+```
+./ae doctor                            # diagnose an existing environment
+./ae run <fig3|fig4|fig6|all> [--mode sim|full]
+./ae report [RUN_ID]                   # generate figures + HTML report
+./ae status [RUN_ID]                   # show run completion status
+./ae cloud check                       # optional replica-cluster preflight
+```
+
+Each `./ae run` creates `runs/<RUN_ID>/` with:
+- `manifest.json` — git commit, timestamp, cluster IPs, mode
+- `events.jsonl` — timestamped event log
+- `checksums.txt` — SHA256 of all scripts and `run.py`
+- `figures/` — auto-generated PDFs
+- `index.html` — standalone HTML report with PASS/WARN/FAIL
+
+---
 
 ## Dependencies
 
-The documented and deployment-tested environment is Ubuntu 20.04 x86-64 with Python 3.8.10. The default build uses Intel SGX simulation mode (`SGX_MODE=SIM`), so SGX-capable hardware is not required for the minimal local test. The SGX SDK and SGX SSL are still required to compile it.
-
-### Required versions
-
-- Ubuntu 20.04 x86-64
-- Python 3.8.10
-- CMake >= 3.9 and a C++14 compiler
-- Intel SGX SDK 2.23.100.2
-- OpenSSL 1.1.x and libuv >= 1.10.0
-- `pkg-config` 0.29.1
-- hiredis 0.14.0 and Redis 5.0.7 (only required for experiment reproduction)
-
-Use the SGX SSL package and Salticidae source included in this repository; neither has a separate release version recorded here.
-
-### System packages
-
-Install the packages required by the test:
-
 ```bash
-sudo apt-get update
-sudo apt-get install -y build-essential cmake git libssl-dev libuv1-dev pkg-config python3 python3-pip
-```
+# System packages (coordinator and nodes)
+sudo apt-get install -y build-essential cmake git libssl-dev libuv1-dev \
+    pkg-config python3 python3-pip libhiredis-dev redis-server
 
-The Redis-backed experiment path additionally requires hiredis and Redis:
+# Python packages (coordinator)
+pip3 install matplotlib paramiko scp
 
-```bash
-sudo apt-get install -y libhiredis-dev redis-server
-pkg-config --modversion hiredis
-redis-server --version
-```
-
-Use `--redis` when running an experiment that should use this backend. The default local test uses the in-memory backend and does not start Redis.
-
-### SGX kernel support
-
-Hardware-mode experiments require an SGX-capable machine and the Linux in-kernel SGX driver. On Ubuntu 20.04, run the included setup check:
-
-```bash
-cd /root/Raftel
-sudo bash deployment/sourcefile/SGX_init.sh
-```
-
-If it installs the HWE kernel, reboot and run the command again. A successful setup exposes both devices:
-
-```bash
-ls /dev/sgx_enclave /dev/sgx_provision
-```
-
-The minimal local test uses SGX simulation mode and does not require SGX hardware or these device nodes.
-
-### Intel SGX SDK
-
-Extract the bundled installers and install Intel SGX SDK 2.23.100.2 under `/opt/intel/sgxsdk`:
-
-```bash
-cd /root/Raftel/deployment/sourcefile
-tar -xzf archive.tar.gz
+# SGX SDK (already installed on the author-prepared nodes)
+cd deployment/sourcefile && tar -xzf archive.tar.gz
 printf 'no\n/opt/intel\n' | sudo ./sgx_linux_x64_sdk_2.23.100.2.bin
 source /opt/intel/sgxsdk/environment
-```
 
-Run the final `source` command in each new shell before building or running an experiment.
+# SGX kernel driver for HW mode (cloud nodes)
+sudo bash deployment/sourcefile/SGX_init.sh   # reboot if prompted
+ls /dev/sgx_enclave /dev/sgx_provision        # verify
 
-### Python packages
-
-- `matplotlib`
-- `paramiko`
-- `scp`
-- `aliyun-python-sdk-core` (Ali Cloud deployment only)
-
-### Salticidae
-
-If you decide to install Salticidae locally, you will need Git and CMake. After cloning the repository, initialize the Salticidae Git submodule:
-
-```bash
-git submodule init
-```
-
-followed by:
-
-```bash
-git submodule update
-```
-
-Salticidae has the following dependencies:
-
-- CMake >= 3.9
-- C++14
-- libuv >= 1.10.0
-- OpenSSL >= 1.1.0
-
-Install these dependencies with:
-
-```bash
-sudo apt install cmake libuv1-dev libssl-dev
-```
-
-Then, to install Salticidae, run:
-
-```bash
+# Salticidae submodule (coordinator)
+git submodule update --init
 (cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)
 ```
 
-## Experiments
+---
 
-> **Note:** If you are using a server on which all dependencies and the SGX environment have already been configured, start from this section.
+## Troubleshooting
 
-`run.py` compiles the selected protocol, generates the local configuration, starts the replicas and client, and prints the aggregated throughput and latency. Run it from the repository root.
+**`mkConfig` reports insufficient replica capacity**
+Run `./ae doctor` and send its output to the authors; the
+provided cluster inventory does not match the selected mode.
 
-### Local experiments
+**`make SGX_MODE=HW failed`**
+Verify the SGX SDK is sourced (`source /opt/intel/sgxsdk/environment`) and that `/dev/sgx_enclave` exists on the build node.
 
-The protocol selectors implemented by `run.py` are:
+**WAN netem setup fails on one node**
+The script exits immediately. Run `./ae cloud check` and send the failed host
+and run ID to the authors.
 
-- `--p0`: Raftel
-- `--p1`: Chained
-- `--p2`: Achilles
-- `--p3`: Hotstuff
-- `--p4`: Basic-Damysus
+**`./ae cloud check` reports `hiredis:MISSING` on a node**
+Send the check output to the authors; the prepared node is incomplete.
 
-If no protocol selector is supplied, `run.py` defaults to `--p0`.
+**Zero completions in experiment 3**
+Verify Redis is running on all nodes (`./ae cloud check`) and that
+`aliyun/priv_ip.txt` has at least 25 entries in Full mode. The experiment script
+sets `--payload 1100 --kv-value-len 1024` automatically.
 
-Common local options are:
-
-- `--local`: run all replicas on the current machine.
-- `--faults N`: set the number of tolerated faults (default: `1`). The protocol determines the replica count.
-- `--totaltee N`: set the number of TEE replicas for Raftel (default: `0`). Protocols with a fixed TEE population ignore this option.
-- `--payload N`: set the payload size in bytes (default: `256`).
-- `--batchsize N`: set the compile-time maximum transactions per batch (default: `400`).
-- `--views N`: set the number of views passed to each replica (default: `10`).
-- `--redis`: use the Redis-backed KV path instead of the in-memory backend.
-- `--debug`: build and run the non-enclave server executable.
-
-Run `python3 run.py --help` for fault-injection, leader-selection, workload-mix, and plotting options.
-
-#### Minimal local test
-
-```bash
-cd /root/Raftel
-source /opt/intel/sgxsdk/environment
-python3 run.py --local --p0 --faults 1 --totaltee 2
-```
-
-This compiles Raftel in SGX simulation mode and runs four local replicas, two of which are configured as TEE replicas. The experiment typically takes about two minutes. A successful run finishes all processes and prints throughput and latency summaries similar to:
-
-```text
-Raftel_1_2_256_400_0 thr_view= 314.6285385 lat_view= 1.27134375 e2e_reply_tps= 0.425713 e2e_p95= 2.324 e2e_p99= 2.324
-```
-
-The exact values depend on the machine; successful process completion and non-empty throughput/latency results are the relevant smoke-test criteria.
-
-### Ali Cloud experiments
-
-Check out the repository at `/root/Raftel` on the coordinator machine. Cloud deployment uses Ubuntu 20.04 ECS instances, root SSH access, private-network connectivity from the coordinator to every instance, and the SSH private key `/root/Raftel/TShard`.
-
-Create the local `aliyun/config.json` from `aliyun/config.example.json`, then configure the region, access key, image, security group, VPC, vSwitch, instance type, and key-pair name for the target Ali Cloud account. `aliyun/config.json` is excluded from Git and must remain local because it contains account credentials and resource identifiers. Ali Cloud instance-management scripts are in `aliyun/`; cluster deployment scripts are in `deployment/`; and the archive and initialization script copied to each node are in `deployment/sourcefile/`.
-
-#### Launch instances
-
-Install the Aliyun SDK, then create the instances from the coordinator:
-
-```bash
-cd /root/Raftel
-python3 aliyun/create_run_instances.py
-```
-
-The default `instance_count` in `aliyun/config.json` is `7`. Instance IDs are appended to `aliyun/instances.txt`. Wait for every instance to enter the `Running` state, acquire a private IP address, and accept SSH connections:
-
-```bash
-python3 aliyun/wait_instances_ready.py
-```
-
-The polling script reads `aliyun/instances.txt` and writes `aliyun/priv_ip.txt` only after all listed instances pass every check. By default it polls every 10 seconds for up to 15 minutes. Use `--interval`, `--timeout`, `--key`, or `--user` to override those settings. `run.py` later reads `aliyun/priv_ip.txt` and, for every cloud run, calls `mkConfig(...)` to generate the replica configuration and the repository-root `config`, `clients`, and `ip_list` files from the selected protocol and fault parameters.
-
-Transfer the deployment archives and initialization scripts to every address in `aliyun/priv_ip.txt`:
-
-```bash
-bash deployment/cloud_deploy.sh
-```
-
-`deployment/cloud_deploy.sh` performs file transfer only. It invokes `deployment/transfer.py`, which copies `deployment/sourcefile/archive.tar.gz` and `deployment/sourcefile/init.sh` to `/root/` on each instance. Therefore, instance creation and readiness polling must be run explicitly first.
-
-#### Configure the nodes
-
-Start one background tmux setup session per instance:
-
-```bash
-bash deployment/cloud_config.sh
-```
-
-Each session connects to a node and runs `/root/init.sh`. Inspect a particular setup session with:
-
-```bash
-tmux list-sessions
-tmux attach -t setup1
-```
-
-Detach without stopping the remote installation by pressing `Ctrl-b`, then `d`. Do not type `exit` merely to detach: it terminates the SSH shell in that session. When all installations have completed, close the setup sessions with:
-
-```bash
-bash deployment/close.sh
-```
-
-Warning: `deployment/close.sh` kills every tmux session on the coordinator, not only sessions named `setup*`.
-
-For Redis-backed reproduction, install hiredis on all configured nodes after the SGX setup:
-
-```bash
-bash deployment/install_hiredis_on_ips.sh
-```
-
-#### Run a cloud experiment
-
-Run `run.py` from `/root/Raftel` without `--local`. It reads the generated node files and deploys the compiled binaries to the remote nodes. For example:
-
-If `--experiment-number` is omitted, the run is treated as a minimal cloud smoke test and its generated artifacts and collected results are written under `experiments_reproduction/experiment0/`. Passing `--experiment-number N` continues to select `experiments_reproduction/experimentN/`.
-
-```bash
-cd /root/Raftel
-source /opt/intel/sgxsdk/environment
-python3 run.py --p0 --faults 1 --totaltee 2
-```
-
-Add `--redis` to reproduce the Redis-backed KV path. For each selected experiment directory, `run.py` stores compiled binaries and generated `params.h` files under `exe/`, the latest raw node results under `results/current/`, remote and client logs under `log/current/`, and computed statistics in `stats.txt`. To fetch remote `out<N>` logs manually into `log/manual/`, run:
-
-```bash
-python3 deployment/fetch_remote_logs.py
-```
-
-Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
-
-```bash
-cd /root/Raftel
-python3 aliyun/delete_instances.py
-```
-
-#### Experiments Reproduction
-
-The following scripts reproduce the main experiments corresponding to Figures 3, 4, and 6 in the paper. Run them after completing the Ali Cloud deployment and node configuration above. Before running a script, verify that `/root/Raftel/ip_list` contains the remote node IPs and `/root/Raftel/TShard` is a valid SSH private key.
-
-At the start of each experiment, its script removes the previous contents of that experiment's `exe/`, `log/`, `out/`, and `results/` directories (except `.gitkeep`) and starts a new `stats.txt`. Copy any results that you want to retain before rerunning an experiment.
-
-**Experiment 1 — WAN scalability (Figure 3)**
-
-This experiment applies a 50 ms network delay to the remote nodes and measures the throughput and latency of five protocols plus the Raftel-Worst configuration, with fault thresholds of 1, 2, 4, 8, 16, and 32. Raftel-Worst uses `--p0`, `totaltee=faults`, and fixed leader replica `faults+1`.
-
-Estimated running time: approximately 2 hours.
-
-```bash
-cd /root/Raftel
-bash experiments_reproduction/experiment1/script/run_wan.sh
-```
-
-View the results in:
-
-- `experiments_reproduction/experiment1/stats.txt`: throughput and latency for every protocol/fault-threshold combination.
-- `experiments_reproduction/experiment1/exe/`: compiled executables and generated `params.h` files.
-- `experiments_reproduction/experiment1/results/<protocol>_f<faults>/`: raw statistics for each run.
-- `experiments_reproduction/experiment1/log/<protocol>_f<faults>/`: orchestrator and remote-replica logs.
-
-Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
-
-```bash
-cd /root/Raftel
-python3 aliyun/delete_instances.py
-```
-
-**Experiment 2 — TEE leader and quorum combinations (Figure 4)**
-
-This LAN experiment evaluates Raftel under four combinations: a TEE or non-TEE leader, with or without enough TEE replicas to form a TEE quorum. Each set is evaluated with fault thresholds of 1, 2, 4, 8, 16, and 32, using a batch size of 400 and a 256-byte payload.
-
-Estimated running time: approximately 1.5 hours.
-
-```bash
-cd /root/Raftel
-bash experiments_reproduction/experiment2/script/run_lan.sh
-```
-
-View the results in:
-
-- `experiments_reproduction/experiment2/stats.txt`: computed throughput and latency for all 24 combinations, labeled `set<1-4>_f<faults>`.
-- `experiments_reproduction/experiment2/exe/`: compiled executables and generated `params.h` files.
-- `experiments_reproduction/experiment2/results/set<1-4>_f<faults>/`: raw statistics for each combination.
-- `experiments_reproduction/experiment2/log/set<1-4>_f<faults>/`: orchestrator and remote-replica logs.
-
-Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
-
-```bash
-cd /root/Raftel
-python3 aliyun/delete_instances.py
-```
-
-**Experiment 3 — Redis end-to-end performance (Figure 6)**
-
-This experiment applies a 50 ms network delay and runs a Redis-backed, 100% SET workload with 1 KB values. It compares the end-to-end throughput and latency of the five protocols with `faults=8`, four clients, and three repetitions per protocol.
-
-Estimated running time: approximately 1.5 hours.
-
-```bash
-cd /root/Raftel
-bash experiments_reproduction/experiment3/script/run_redis_wan.sh
-```
-
-View the results in:
-
-- `experiments_reproduction/experiment3/stats.txt`: final mean E2E metrics grouped by protocol.
-- `experiments_reproduction/experiment3/exe/`: compiled executables and generated `params.h` files.
-- `experiments_reproduction/experiment3/results/raw/<protocol>_repeat<n>/`: raw statistics and client E2E measurements.
-- `experiments_reproduction/experiment3/log/<protocol>_repeat<n>/`: orchestrator and remote-replica logs.
-
-Ali Cloud resources incur charges. When the experiment is complete, verify the IDs in `aliyun/instances.txt` and release those instances with:
-
-```bash
-cd /root/Raftel
-python3 aliyun/delete_instances.py
-```
-
-Each experiment directory also contains a dedicated `README.md` with its complete configuration and output layout.
+**SGX devices missing after reboot**
+Re-run `sudo bash deployment/sourcefile/SGX_init.sh` on the affected node. On some kernels the in-kernel SGX driver requires a second boot after installing the HWE kernel.

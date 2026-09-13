@@ -58,8 +58,8 @@ grep -qxF 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib' ~/.bashrc || 
 source ~/.bashrc
 
 
-sudo apt install -y cmake libuv1-dev libssl-dev
-python3 -m pip install pathlib matplotlib
+sudo apt install -y cmake libuv1-dev libssl-dev libhiredis-dev pkg-config python3-pip
+python3 -m pip install pathlib matplotlib paramiko scp aliyun-python-sdk-core
 source /opt/intel/sgxsdk/environment
 
 cd ~
@@ -68,15 +68,19 @@ mkdir -p obj
 mkdir -p results
 
 cd ~
-if [ -d /root/Raftel/.git ]; then
-    git -C /root/Raftel pull --ff-only origin main
-else
-    git clone https://github.com/1wenwen1/Raftel.git /root/Raftel
-fi
-cd Raftel
-git submodule init
-git submodule update
-(cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)
+# AE FIX (provenance): deployment supplies the evaluated source snapshot. Do not pull
+# origin/main, which may differ from the coordinator's audited build inputs.
+test -f /root/Raftel/Makefile
+cd /root/Raftel
+test -f salticidae/CMakeLists.txt
+# Build out of tree so a coordinator archive can never reuse a CMake cache that
+# records the developer workstation's absolute path.
+(cd salticidae; \
+    rm -rf build-ae lib; \
+    cmake -S . -B build-ae -DCMAKE_INSTALL_PREFIX=.; \
+    cmake --build build-ae --parallel 2; \
+    cmake --install build-ae)
+
 
 
 # KV store backend for experiments (run.py starts redis-server per replica on 127.0.0.1)

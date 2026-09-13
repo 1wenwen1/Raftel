@@ -12,6 +12,8 @@ remain module-level constants below.
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import glob
+import json
+import hashlib
 import math
 import multiprocessing
 import os
@@ -36,29 +38,21 @@ from scp import SCPClient
 # Protocol topology
 # ---------------------------------------------------------------------------
 
-# Each value is (replica-count factor, source branch). A factor of 3 means
-# 3f+1 replicas; a factor of 2 means 2f+1 replicas.
-_PROTOCOL_CHECKOUT = {
-    "Raftel": (3, "main"),
-    "Chained": (3, "main"),
-    "Achilles": (2, "main"),
-    "Hotstuff": (3, "main"),
-    "Basic-Damysus": (2, "main"),
+# A factor of 3 means 3f+1 replicas; a factor of 2 means 2f+1 replicas.
+_PROTOCOL_FACTORS = {
+    "Raftel": 3,
+    "Chained": 3,
+    "Achilles": 2,
+    "Hotstuff": 3,
+    "Basic-Damysus": 2,
 }
 
 
 def protocol_factor(protocol: str) -> int:
     """Return the coefficient in the protocol's ``factor * faults + 1`` size."""
-    if protocol not in _PROTOCOL_CHECKOUT:
+    if protocol not in _PROTOCOL_FACTORS:
         raise ValueError(f"Unknown protocol: {protocol!r}")
-    return _PROTOCOL_CHECKOUT[protocol][0]
-
-
-def protocol_git_branch(protocol: str) -> str:
-    """Return the source branch associated with ``protocol``."""
-    if protocol not in _PROTOCOL_CHECKOUT:
-        raise ValueError(f"Unknown protocol: {protocol!r}")
-    return _PROTOCOL_CHECKOUT[protocol][1]
+    return _PROTOCOL_FACTORS[protocol]
 
 
 def num_replicas(factor: int, faults: int) -> int:
@@ -105,12 +99,11 @@ def protocol_totaltee(protocol: str, faults: int, totalnodes: int, requested: in
 # Paths (single place to change repo layout)
 PROJECT_ROOT = Path(__file__).resolve().parent
 # Remote SSH/SCP tree (default: same as local checkout; override if needed)
-REMOTE_PROJECT_ROOT = Path(os.environ.get("DAMYSUS_REMOTE_ROOT", str(PROJECT_ROOT)))
+REMOTE_PROJECT_ROOT = Path(os.environ.get("DAMYSUS_REMOTE_ROOT", "/root/Raftel"))
 
 raw_ip_list = PROJECT_ROOT / "aliyun" / "priv_ip.txt"
 ip_list = PROJECT_ROOT / "ip_list"
 clients = PROJECT_ROOT / "clients"
-close_py = PROJECT_ROOT / "close.py"
 
 # These output paths are initialized to their historical root for import
 # compatibility. main() redirects them to the selected experiment directory.
@@ -124,7 +117,7 @@ client_stats_file = RUN_OUTPUT_ROOT / "client_stats"
 
 # Experiment defaults. CLI arguments override the values exposed by main();
 # the remaining values are shared by helper functions below.
-sgxmode     = "SIM"
+sgxmode     = "SIM"   # overridden by --sgx-mode CLI flag in main()
 #sgxmode      = "HW"
 srcsgx       = "source /opt/intel/sgxsdk/environment" # this is where the sdk is supposed to be installed
 statsdir     = "stats"        # stats directory (don't change, hard coded in C++)
@@ -143,7 +136,9 @@ numChCls     = 1     # number of clients for the chained versions
 numClTrans   = 1     # number of transactions sent by each clients
 sleepTime    = 0     # start servers between 2 sends (in microseconds)
 timeout      = 5     # timeout before changing changing leader (in seconds)
-timeoutTime  = 240    #waiting time for the servers execution
+# Control-plane wait bound. Simulation multiplexing can need longer to drain many
+# enclave processes; AE_TIMEOUT_SEC changes only this bound, not protocol args.
+timeoutTime  = int(os.environ.get("AE_TIMEOUT_SEC", "240"))
 # WAN / cloud runs (~100ms RTT): view-change timer near 2s is typical (override via --view-timeout).
 kv_set_ratio = 30
 kv_get_ratio = 60
@@ -162,7 +157,7 @@ forcrmake = True
 no_stash = True
 # SSH defaults
 SSH_USERNAME = 'root'
-SSH_KEY_PATH = './TShard'
+SSH_KEY_PATH = os.environ.get("RAFTEL_SSH_KEY", str(PROJECT_ROOT / "TShard"))
 
 # Deployment settings
 numInstance   = 15 #number of instances run in a Machine
@@ -230,8 +225,18 @@ def prepare_local_runtime_files(debug: bool) -> None:
 def read_ip_list(filename):
     """Read non-empty host addresses from ``filename`` in file order."""
     with open(filename, 'r') as file:
-        ip_list = [line.strip() for line in file.readlines() if line.strip()]
-    return ip_list
+        hosts = [line.strip() for line in file.readlines() if line.strip()]
+    # A prepared Full cluster may also serve Simulation runs. Limit only the
+    # author-installed replica inventory; generated per-run lists already
+    # contain exactly the participating hosts.
+    if Path(filename).resolve() == raw_ip_list.resolve():
+        raw_limit = os.environ.get("AE_HOST_LIMIT")
+        if raw_limit:
+            limit = int(raw_limit)
+            if limit < 1:
+                raise ValueError("AE_HOST_LIMIT must be positive")
+            hosts = hosts[:limit]
+    return hosts
 
 def read_servers(total, filename):
     """Read at most ``total`` replica records from a generated config file."""
@@ -297,7 +302,7 @@ def ssh_clear_remote_stats_on_host(ip: str) -> None:
     remote_stats = remote_stats_dir()
     bash = (
         f"mkdir -p {shlex.quote(remote_stats)} && "
-        f"find {shlex.quote(remote_stats)} -mindepth 1 -maxdepth 1 -delete"
+        f"rm -rf -- {shlex.quote(remote_stats)}/*"
     )
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
@@ -361,13 +366,13 @@ def ssh_exec_server_non_blocking(
 
     # Non-blocking monitoring of command execution status
     def monitor_ssh():
-        stdout.channel.recv_exit_status() 
+        exit_code = stdout.channel.recv_exit_status()
         output = stdout.read().decode()
         error = stderr.read().decode()
         # print(f"sgxserver on {host} with id {id} output:\n{output}")
         # print(f"sgxserver on {host} with id {id} error:\n{error}")
         with lock:
-            completion_set.add((id, host))
+            completion_set[(id, host)] = (exit_code, error)
         ssh.close()
 
     # start monitoring thread
@@ -385,7 +390,7 @@ def ssh_exec_servers_non_blocking(
     max_workers=6,
 ):
     """Start remote replicas and wait until the expected set completes."""
-    completion_set = set()
+    completion_set = {}
     lock = Lock()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -447,7 +452,7 @@ def scp_from_node(ip):
         raise RuntimeError(f"Failed to get transport for {ip}")
 
     with SCPClient(transport) as scp:
-        scp.get('/remote/damysus/stats/*', local_path='damysus/stats/')  # 修改为实际的远程路径和本地路径
+        scp.get('/remote/damysus/stats/*', local_path='damysus/stats/')  # Replace with the actual remote and local paths.
     ssh.close()
 
 def scp_files_to_nodes(ip_list, files, max_workers=6):
@@ -494,7 +499,7 @@ def start_all_sgxservers(
     redis_enabled: bool = False,
 ):
     """Dispatch every remote replica and return shared completion state."""
-    completion_set = set()
+    completion_set = {}
     lock = threading.Lock()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
@@ -582,6 +587,39 @@ def ssh_stop_project_servers_on_hosts(hosts, max_workers=6) -> None:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(ssh_stop_project_servers_on_host, host)
+            for host in sorted(set(hosts))
+        ]
+        for future in as_completed(futures):
+            future.result()
+
+
+def ssh_stop_project_redis_on_host(host: str) -> None:
+    """Stop Redis processes whose working directory belongs to this checkout."""
+    remote_redis = str(REMOTE_PROJECT_ROOT / "stats" / "redis")
+    bash = (
+        "for pid in $(pgrep -x redis-server 2>/dev/null || true); do "
+        "cwd=$(readlink -f /proc/$pid/cwd 2>/dev/null || true); "
+        f"case \"$cwd\" in {shlex.quote(remote_redis)}/*) kill -TERM $pid 2>/dev/null || true;; esac; "
+        "done; sleep 0.5"
+    )
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.connect(host, username=SSH_USERNAME, key_filename=SSH_KEY_PATH)
+    _stdin, stdout, stderr = ssh.exec_command("bash -lc " + shlex.quote(bash))
+    exit_code = stdout.channel.recv_exit_status()
+    err = stderr.read().decode().strip()
+    ssh.close()
+    if exit_code != 0:
+        raise RuntimeError(
+            f"stop project Redis failed on {host}: exit={exit_code} err={err}"
+        )
+
+
+def ssh_stop_project_redis_on_hosts(hosts, max_workers=6) -> None:
+    """Stop experiment-owned Redis processes on every participating host."""
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(ssh_stop_project_redis_on_host, host)
             for host in sorted(set(hosts))
         ]
         for future in as_completed(futures):
@@ -756,24 +794,83 @@ def stop_local_clients() -> None:
 
 
 # Block and wait for all sgxserver instances to end
-def wait_for_all_sgxservers_to_finish(completion_set, lock, total_servers):
-    """Wait for remote replicas, stopping the cluster after the timeout."""
+def wait_for_all_sgxservers_to_finish(
+    completion_set, lock, total_servers, faults=0
+):
+    """Wait for the completion required by the selected deployment topology.
+
+    Full runs require every one-replica-per-host process. In the original
+    seven-host multiplexed runner, replicas that finish first exit and lagging
+    replicas can no longer advance once the live population drops below a
+    quorum. Requiring every process therefore turns a successful consensus run
+    into a deterministic timeout. Simulation accepts only after ``n-f`` successful
+    replicas, the protocol quorum for both 3f+1 and 2f+1 configurations.
+    """
+    multiplexed = os.environ.get("AE_ALLOW_MULTIPLEXING") == "1"
+    required = total_servers - faults if multiplexed else total_servers
+    if required < 1:
+        raise ValueError("completion target must be positive")
     l = 0
-    start_time = time.time()  # Start the timer
-    while len(completion_set) < total_servers:
-        if(len(completion_set) > l):
-            l = len(completion_set)
-            t = time.time()
-            print(f'finishied {l}')
-        # Check if the timeout has been reached
+    start_time = time.time()
+    while True:
+        with lock:
+            snapshot = dict(completion_set)
+        failed = {str(k): v for k, v in snapshot.items() if v[0] != 0}
+        if failed:
+            raise RuntimeError(f"Remote replica exited unsuccessfully: {failed}")
+        completed = len(snapshot)
+        if completed > l:
+            l = completed
+            print(f"finished {l}/{total_servers} replica processes")
+        if completed >= required:
+            mode = "multiplexed quorum" if multiplexed else "all replicas"
+            print(
+                f"Completion criterion met: {completed}/{total_servers} successful "
+                f"({mode}, required={required})."
+            )
+            completed_ids = sorted(key[0] for key in snapshot)
+            return {
+                "mode": mode,
+                "required": required,
+                "completed": completed,
+                "completed_replica_ids": completed_ids,
+                "straggler_replica_ids": [
+                    replica_id for replica_id in range(total_servers)
+                    if replica_id not in set(completed_ids)
+                ],
+            }
         if time.time() - start_time > timeoutTime:
-            print(f"Timeout reached. Stopping remote server.")
-            stop_remote_server()  # Stop the server if timeout
-            break
-    
-    # If all servers finish, print a message
-    if len(completion_set) == total_servers:
-        print("All sgxserver instances have finished.")
+            elapsed = time.time() - start_time
+            timeout_evidence = {
+                "reason": "orchestration_deadline",
+                "timeout_sec": timeoutTime,
+                "elapsed_sec": round(elapsed, 3),
+                "completed": completed,
+                "required": required,
+                "total_replicas": total_servers,
+                "classification": (
+                    "partial_completion_before_deadline"
+                    if completed else "no_replica_completed_before_deadline"
+                ),
+                "note": (
+                    "The deadline is an orchestration guard inherited from the original "
+                    "artifact, not a standard experiment duration. Preserved process logs "
+                    "must be inspected to distinguish slow progress from protocol stagnation."
+                ),
+            }
+            out_dir.mkdir(parents=True, exist_ok=True)
+            with (out_dir / "timeout.json").open("w") as timeout_file:
+                json.dump(timeout_evidence, timeout_file, indent=2)
+                timeout_file.write("\n")
+            print(
+                "Orchestration deadline reached before the completion criterion; "
+                f"classification={timeout_evidence['classification']}."
+            )
+            raise RuntimeError(
+                f"Remote completion insufficient: {completed}/{total_servers}; "
+                f"required={required}; elapsed={elapsed:.1f}s; evidence={out_dir / 'timeout.json'}"
+            )
+        time.sleep(0.1)
             
 
 
@@ -1381,6 +1478,10 @@ def wait_local_client_procs(client_procs, deadline_sec: float):
         return
     deadline = time.time() + deadline_sec
     while time.time() < deadline:
+        # AE FIX: propagate explicit client errors (including failed KV requests).
+        failed = [p.returncode for p in client_procs if p.poll() is not None and p.returncode != 0]
+        if failed:
+            raise RuntimeError(f"Client process failed: exit codes {failed}")
         if all(p.poll() is not None for p in client_procs):
             return
         time.sleep(0.5)
@@ -1604,6 +1705,21 @@ def mkConfig(n, totaltee):
     # Read IP list
     host_ips = read_ip_list(str(raw_ip_list))
 
+    # AE FIX (paper section 7.1): Full runs require one replica per host. Simulation opts in
+    # to the original port-based multiplexing and are labelled non-paper topology.
+    multiplexed = os.environ.get("AE_ALLOW_MULTIPLEXING") == "1"
+    capacity = len(host_ips) * numInstance if multiplexed else len(host_ips)
+    if n > capacity:
+        raise RuntimeError(
+            f"mkConfig: {n} replicas requested but capacity is {capacity} across "
+            f"{len(host_ips)} hosts in "
+            f"{raw_ip_list}.\n"
+            f"  Simulation mode: use seven hosts and ./ae run ... --mode sim.\n"
+            f"  Paper-scale mode: provision enough instances first — "
+            f"run: ./ae cloud up --count {n}\n"
+            f"  Paper §7.1 requires exactly 1 replica per host for valid WAN experiments."
+        )
+
     # Generate server configuration
     server_lines, used_ips = generate_servers(host_ips, n, numInstance)
 
@@ -1665,22 +1781,13 @@ def makeInstance(protocol, debug, batchsize, payload, faults, totaltee, pct):
 
     # MAX_NUM_TEE_SIGNATURES depends on totaltee, so binaries compiled for
     # different TEE populations must not share the same cache directory.
-    pro_dir = str(exen / f"{protocol}_{faults}_{totaltee}_{payload}_{batchsize}_{pct}")
+    cache_name = f"{protocol}_{faults}_{totaltee}_{payload}_{batchsize}_{pct}_{'DEBUG' if debug else sgxmode}"
+    pro_dir = str(exen / cache_name)
 
     factor = protocol_factor(protocol)
-    branch = protocol_git_branch(protocol)
-    # change to the correct branch
-    cmd_stash = 'git stash &&'
-    if no_stash:
-        cmd_stash = ' '
-    cmd = f"{cmd_stash} git checkout {branch}"
-
-    process = Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
-    stdout, stderr = process.communicate()
-    output = stdout.decode()
-    error = stderr.decode()
-    print(f"Stop checkout output:\n{output}")
-    print(f"Stop checkout error:\n{error}")
+    # AE FIX (provenance): all protocol implementations are selected by mkParams;
+    # retain the evaluated checkout, including uncommitted fixes, throughout a run.
+    # Runtime git checkout previously replaced the AE code with origin/main.
 
     # make params
     print(f"mkprotocol: {protocol}, factor:{factor}, batchsize: {batchsize}, payload: {payload}, teetotal: {totaltee}, pct: {pct}")
@@ -1696,40 +1803,70 @@ def makeInstance(protocol, debug, batchsize, payload, faults, totaltee, pct):
 
  
     # check if built binary and params.h exist (debug uses server/, release uses sgxserver)
-    if debug:
-        server_path = os.path.join(folder_path, "server")
-        params_h_path = os.path.join(folder_path, "params.h")
-        server_exists = os.path.isfile(server_path)
-        params_h_exists = os.path.isfile(params_h_path)
-    else:
-        sgxserver_path = os.path.join(folder_path, "sgxserver")
-        params_h_path = os.path.join(folder_path, "params.h")
-        server_exists = os.path.isfile(sgxserver_path)
-        params_h_exists = os.path.isfile(params_h_path)
+    artifacts = (["server", "client"] if debug else
+                 ["sgxserver", "sgxclient", "sgxkeys", "enclave.so", "enclave.signed.so"])
+    params_h_path = os.path.join(folder_path, "params.h")
+    cache_complete = all(os.path.isfile(os.path.join(folder_path, name)) for name in artifacts)
+    cache_complete = cache_complete and os.path.isfile(params_h_path)
     
     # need to make or not
-    need_make = True
-    if server_exists and params_h_exists and not forcrmake:
-        need_make = False
-        print("Files exist and force make is disabled, skipping make")
+    run_marker = Path(folder_path) / ".ae-run-id"
+    active_run = os.environ.get("AE_RUN_ID", "")
+    same_ae_run = active_run and run_marker.is_file() and run_marker.read_text().strip() == active_run
+    need_make = not (cache_complete and (same_ae_run or (not forcrmake and not active_run)))
 
     # make (debug: server+client; else: sgxserver)
     if need_make:
         print("Starting make process...")
-        subprocess.call(["make","clean"])
+        # P0-7: check make return codes — a silent build failure would produce
+        # stale binaries and wrong results without any visible error.
+        rc = subprocess.call(["make", "clean"])
+        if rc != 0:
+            raise RuntimeError(f"make clean failed with exit code {rc}")
         if debug:
-            subprocess.call(["make","-j8","server","client"])
+            rc = subprocess.call(["make", "-j8", "server", "client"])
+            if rc != 0:
+                raise RuntimeError(f"make server client failed with exit code {rc}")
             for artifact in ("server", "client"):
                 shutil.copy2(PROJECT_ROOT / artifact, folder_path)
         else:
-            subprocess.run(["bash -c \"" + srcsgx + "\""], shell=True, check=True)
-            subprocess.call(["make","-j",str(numMakeCores),"SGX_MODE="+sgxmode])
-            for artifact in ("sgxserver", "sgxclient", "sgxkeys"):
+            subprocess.run(["bash", "-lc", srcsgx], check=True)
+            rc = subprocess.call(["make", "-j", str(numMakeCores), "SGX_MODE=" + sgxmode])
+            if rc != 0:
+                raise RuntimeError(
+                    f"make SGX_MODE={sgxmode} failed with exit code {rc}. "
+                    "Check that the SGX SDK is correctly installed and sourced."
+                )
+            for artifact in artifacts:
                 shutil.copy2(PROJECT_ROOT / artifact, folder_path)
         shutil.copy2(PROJECT_ROOT / "App" / "params.h", Path(folder_path) / "params.h")
+        if active_run:
+            run_marker.write_text(active_run + "\n")
         print("make finished")
+        if os.environ.get("AE_RUN_DIR"):
+            # Preserve the exact executed build, including enclave and parameters.
+            build_dir = Path(os.environ["AE_RUN_DIR"]) / "builds" / (Path(folder_path).name + "_" + sgxmode)
+            build_dir.mkdir(parents=True, exist_ok=True)
+            files = ["App/params.h"] + (["server", "client"] if debug else ["sgxserver", "sgxclient", "sgxkeys", "enclave.so", "enclave.signed.so"])
+            hashes = {}
+            for name in files:
+                src = PROJECT_ROOT / name
+                shutil.copy2(src, build_dir / src.name)
+                hashes[name] = hashlib.sha256(src.read_bytes()).hexdigest()
+            (build_dir / "sha256.json").write_text(json.dumps(hashes, indent=2))
+            if not debug:
+                linked = subprocess.check_output(["ldd", str(PROJECT_ROOT / "sgxserver")], text=True)
+                (build_dir / "ldd.txt").write_text(linked)
+                if sgxmode == "HW" and ("libsgx_urts_sim" in linked or "libsgx_urts.so" not in linked):
+                    raise RuntimeError("HW build is not linked to the SGX hardware runtime")
     else:
-        print("Skipping make process")
+        # AE FIX: restore the exact cached binary set. The previous cache path
+        # could skip compilation while leaving another protocol's binaries in
+        # the project root.
+        for artifact in artifacts:
+            shutil.copy2(Path(folder_path) / artifact, PROJECT_ROOT / artifact)
+        shutil.copy2(Path(folder_path) / "params.h", PROJECT_ROOT / "App" / "params.h")
+        print(f"Reused exact build cache: {cache_name}")
 #end of makeInstance
 
 # make params
@@ -2671,7 +2808,7 @@ def experiment_fault_cloud(
     stop_poll.set()
     poll_thread.join(timeout=30.0)
 
-    print("[fault-cloud] stopping remaining remote servers (close.py)")
+    print("[fault-cloud] stopping remaining remote servers")
     stop_remote_server()
     time.sleep(2.0)
 
@@ -2856,11 +2993,33 @@ def experiment_once(
         client_procs.append(client_proc)
 
     # Block and wait for all sgxserver instances to end
-    wait_for_all_sgxservers_to_finish(completion_set, lock, total)
+    completion = wait_for_all_sgxservers_to_finish(
+        completion_set, lock, total, faults
+    )
 
     # Wait for orchestrator-local client so stats/client-e2e-* is flushed before SCP/parse.
     wait_local_client_procs(client_procs, float(timeoutTime))
     close_client_log_handles(client_procs)
+
+    # Once a multiplexed quorum has completed, stop replicas that cannot reach
+    # their own terminal view after earlier peers have exited. Their IDs remain
+    # explicit in completion.json; their partial data is never averaged.
+    if completion["completed"] < total:
+        stop_remote_server()
+        time.sleep(1.0)
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    with (stats_dir / "completion.json").open("w") as completion_file:
+        json.dump(
+            {
+                "protocol": protocol,
+                "faults": faults,
+                "total_replicas": total,
+                **completion,
+            },
+            completion_file,
+            indent=2,
+        )
+        completion_file.write("\n")
 
     # get data from nodes
     collect_remote_artifacts(ips)
@@ -2941,6 +3100,7 @@ def experiment(*args, repeats=1, stats_summary_label=None, **kwargs):
         # A prior interrupted run may still be executing the deployed binary,
         # which makes SCP fail with "Text file busy" when replacing it.
         ssh_stop_project_servers_on_hosts(participating_hosts)
+        failed = False
         try:
             throughput, latency = experiment_once(
                 *args,
@@ -2948,11 +3108,31 @@ def experiment(*args, repeats=1, stats_summary_label=None, **kwargs):
                 write_summary=False,
                 **kwargs,
             )
+        except BaseException:
+            failed = True
+            raise
         finally:
             # Servers normally exit by themselves, but always remove stragglers
             # before the next repeat and when this repeat raises an exception.
-            ssh_stop_project_servers_on_hosts(participating_hosts)
-            stop_local_clients()
+            cleanup_errors = []
+            for cleanup in (
+                stop_local_clients,
+                lambda: ssh_stop_project_servers_on_hosts(participating_hosts),
+                lambda: ssh_stop_project_redis_on_hosts(participating_hosts),
+            ):
+                try:
+                    cleanup()
+                except Exception as exc:
+                    cleanup_errors.append(str(exc))
+            if failed:
+                # A failed repeat is more valuable when its partial measurements,
+                # timeout record, and server stdout survive wrapper archival.
+                try:
+                    collect_remote_artifacts(participating_hosts)
+                except Exception as exc:
+                    cleanup_errors.append(f"failure artifact collection: {exc}")
+            if cleanup_errors:
+                print("[warn] cleanup diagnostics: " + "; ".join(cleanup_errors))
         throughput_values.append(throughput)
         latency_values.append(latency)
 
@@ -3060,6 +3240,14 @@ def main():
         '"LABEL, server_vals_thr_mean, server_vals_lat_mean" (no Start/pro_dir lines). '
         'When unset: keep legacy stats.txt lines from experiment paths.',
     )
+    # P0-2: expose SGX mode as a CLI flag; cloud scripts pass --sgx-mode HW for paper runs
+    parser.add_argument(
+        '--sgx-mode',
+        choices=('SIM', 'HW'),
+        default=None,
+        dest='sgx_mode',
+        help='SGX build mode: SIM (simulation, default) or HW (hardware, required for cloud paper runs)',
+    )
     args = parser.parse_args()
 
     if getattr(args, "fault_cloud", False) and args.local:
@@ -3070,6 +3258,14 @@ def main():
         parser.error("--experiment-number must be at least 0")
     if args.repeats < 1:
         parser.error("--repeats must be at least 1")
+
+    # P0-2: apply --sgx-mode to the module-level variable consumed by makeInstance
+    global sgxmode
+    if args.sgx_mode is not None:
+        sgxmode = args.sgx_mode
+    elif args.local:
+        sgxmode = "SIM"   # local/smoke always SIM
+    # else: keep the module default (SIM) unless --sgx-mode HW is passed explicitly
 
     configure_output_paths(args.local, args.experiment_number)
 

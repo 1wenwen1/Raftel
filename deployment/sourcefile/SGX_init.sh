@@ -3,6 +3,7 @@ set -euo pipefail
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y cpuid
+rm -f /var/run/raftel-reboot-required
 
 if ! cpuid -1 -l 0x7 | grep -qi 'SGX:.*true'; then
     echo "ERROR: this instance does not expose Intel SGX through CPUID." >&2
@@ -25,6 +26,7 @@ if dpkg --compare-versions "$running_kernel" lt 5.11; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y linux-generic-hwe-20.04
     echo "A Linux kernel with the in-kernel SGX driver has been installed."
     echo "The coordinator will reboot this server."
+    touch /var/run/raftel-reboot-required
     exit 0
 fi
 
