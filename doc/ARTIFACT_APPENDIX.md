@@ -8,7 +8,7 @@ accepted at EuroSys 2027.
 
 The artifact is a public Git repository containing the Raftel protocol
 implementation (built on [Damysus](https://github.com/vrahli/damysus)),
-experiment scripts for reproducing Figures 3, 4, and 6 from the paper, and
+experiment scripts for reproducing Figures 3 and 4 from the paper, and
 an AE CLI (`./ae`) that automates the full reproduction pipeline.
 
 Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf`
@@ -26,10 +26,9 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 | AE CLI | `ae` (executable Python script) |
 | Figure 3 script (WAN scalability) | `experiments_reproduction/experiment1/script/run_wan.sh` |
 | Figure 4 script (LAN TEE configs) | `experiments_reproduction/experiment2/script/run_lan.sh` |
-| Figure 6 script (Redis E2E LAN, modified) | `experiments_reproduction/experiment3/script/run_redis_wan.sh` |
-| Plot scripts | `scripts/plot_fig{3,4,6}.py` |
+| Plot scripts | `scripts/plot_fig{3,4}.py` |
 | HTML report generator | `scripts/gen_report.py` |
-| Reference values (PDF-read approximations) | `runs/reference/fig{3,4,6}.csv` |
+| Reference values (PDF-read approximations) | `runs/reference/fig{3,4}.csv` |
 | Initialization script for cloud nodes | `deployment/sourcefile/init.sh` |
 | Alibaba Cloud lifecycle scripts | `aliyun/` |
 
@@ -49,12 +48,11 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 - SGX-capable hardware is optional. All delivered experiment scripts run in
   SGX simulation mode; the Intel SGX SDK and SGX SSL are still required.
 - **Network**: 10 Gbps private network between hosts (Alibaba Cloud VPC default).
-  Figure 3 emulates 50 ms one-way WAN delay using `tc netem`; the modified
-  Figure 6 experiment clears netem and uses the hosts' native LAN.
+  Figure 3 emulates 50 ms one-way WAN delay using `tc netem`.
 
 The cloud workflow uses 10 reusable hosts. `run.py` assigns up to 15 replicas to
 each host using distinct ports, for a total capacity of 150 replicas. Figure 3
-and Figure 4 need at most 97 replicas (`f=32`, `3f+1`), while Figure 6 needs 25.
+and Figure 4 need at most 97 replicas (`f=32`, `3f+1`).
 This co-located layout is operationally convenient but is not equivalent to
 one replica per physical host; results include same-host resource contention.
 
@@ -71,8 +69,6 @@ and by the manual steps in the README on the coordinator.
 | Intel SGX PSW | matching SDK | Runtime enclave loader |
 | Intel SGX SSL | (bundled) | Cryptographic primitives inside enclave |
 | Salticidae | (submodule) | Async networking library |
-| hiredis | 0.14.0 | Redis client for experiment 3 |
-| Redis | 5.0.7 | KV store backend for experiment 3 |
 | Python ≥ 3.8 | — | run.py, ae, plot scripts |
 | matplotlib | — | Figure generation |
 | paramiko + scp | — | SSH/SCP orchestration |
@@ -86,7 +82,6 @@ and by the manual steps in the README on the coordinator.
 |---|---|---|
 | Fig 3 | WAN scalability: Achilles ≥ Chained_Raftel ≥ Raftel > Hotstuff ≈ Raftel-Worst | **Full reproduction** — all six protocols at f∈{1,2,4,8,16,32}. Absolute values within ±40% of reference; ordering must match. |
 | Fig 4 | LAN TEE-config effect: S1 > S2 ≥ S3 > S4 throughput, S1 ≤ … ≤ S4 latency | **Full reproduction** — four configurations at f∈{1,2,4,8,16,32}. Paper-exact: S1 at f=32 = 31.5 kTPS. |
-| Fig 6 | Redis E2E LAN (modified) | Load sweep clients∈{1,2,4,8,16,32}, 3 repeats. Paper WAN absolute values are not directly comparable. |
 
 Absolute throughput and latency numbers depend on simulation overhead, cloud
 network jitter, and instance placement within the Alibaba Cloud region.
@@ -102,7 +97,7 @@ protocols is consistent with the paper and absolute values fall within the
 
 ```
 ./ae doctor --profile paper   # verify all dependencies
-./ae run all                   # run Figs 3, 4, 6 (~4–6 h)
+./ae run all                   # run Figs 3 and 4 (~4–6 h)
 ./ae report                    # generate figures + HTML report
 ```
 
@@ -135,7 +130,7 @@ cp aliyun/config.example.json aliyun/config.json   # edit with your account
 
 ## Notes on AE Fixes
 
-Three correctness bugs in the original code were fixed for this AE:
+Two correctness bugs in the original code were fixed for this AE:
 
 1. **Explicit SGX mode selection:** `run.py` exposes `--sgx-mode {SIM,HW}`;
    all delivered experiment scripts explicitly select `SIM`. Hardware mode is
@@ -144,10 +139,5 @@ Three correctness bugs in the original code were fixed for this AE:
 2. **Raftel-Worst wrong `totaltee`** (Figure 3): original script used
    `--totaltee f`, but §7.2 defines Raftel-Worst as `m=0` (no TEE fast path).
    Fixed to `--totaltee 0`.
-
-3. **Redis payload silent failure** (Figure 6): original `--payload 256
-   --kv-value-len 1024` caused `KVAppCodec::encode` to silently drop every
-   request (key + 1024 B value + 14 B header = 1043 B > 256 B).
-   Fixed to `--payload 1100 --kv-value-len 1024`.
 
 See `doc/CODE_OVERVIEW.md` for full details.

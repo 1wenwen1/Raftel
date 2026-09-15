@@ -7,9 +7,9 @@ Usage: python3 gen_report.py <run_dir>
 
 Reads:
   <run_dir>/manifest.json
-  <run_dir>/figures/fig{3,4,6}.pdf  (converted to PNG for embedding)
-  experiments_reproduction/experiment{1,2,3}/stats.txt
-  runs/reference/fig{3,4,6}.csv
+  <run_dir>/figures/fig{3,4}.pdf  (converted to PNG for embedding)
+  experiments_reproduction/experiment{1,2}/stats.txt
+  runs/reference/fig{3,4}.csv
   <run_dir>/checksums.txt
   <run_dir>/events.jsonl
 
@@ -40,7 +40,6 @@ GITHUB_REPO = "https://github.com/1wenwen1/Raftel"
 EXPECTED_THR_ORDER = {
     "fig3": [["Achilles"], ["Chained_Raftel"], ["Raftel"], ["Hotstuff", "Basic-Damysus", "Raftel-Worst"]],
     "fig4": [["set1"], ["set2", "set3"], ["set4"]],
-    "fig6": [["Achilles"], ["Chained_Raftel"], ["Raftel"], ["Basic-Damysus"], ["Hotstuff"]],
 }
 EXPECTED_LAT_ORDER = {
     "fig3": [["Raftel", "Chained_Raftel"], ["Basic-Damysus"], ["Hotstuff", "Raftel-Worst"]],
@@ -105,10 +104,6 @@ def _load_reference(fig: str) -> dict:
                     key = (row["set"], row["faults"])
                     result[key] = {"thr": float(row["throughput_ktps"]),
                                    "lat": float(row["latency_ms"])}
-                elif fig == "fig6":
-                    key = (row["protocol"], row["load_clients"])
-                    result[key] = {"thr": float(row["throughput_ktps"]),
-                                   "lat": float(row["latency_avg_ms"])}
             except (KeyError, ValueError):
                 continue
     return result
@@ -227,37 +222,6 @@ def _fig4_summary(ref: dict, stats_file: Path) -> dict:
             "avg_thr": avg_thr, "s1_f32": s1_f32_measured, "rows": rows, "ref": ref}
 
 
-def _fig6_summary(ref: dict, stats_file: Path) -> dict:
-    rows = _parse_stats(stats_file)
-    if not rows:
-        return {"status": "no_data"}
-
-    # Find peak throughput per protocol
-    proto_peak: dict = {}
-    for row in rows:
-        parts = row.get("_parts", [])
-        if len(parts) < 4:
-            continue
-        protocol = parts[0]
-        if protocol == "protocol":
-            continue
-        try:
-            thr_tps = float(parts[3]) * 1000.0  # kTPS → TPS
-        except (ValueError, IndexError):
-            continue
-        if protocol not in proto_peak or thr_tps > proto_peak[protocol]:
-            proto_peak[protocol] = thr_tps
-
-    # Convert to kTPS for ordering check
-    proto_peak_k = {p: v / 1000.0 for p, v in proto_peak.items()}
-    ok, desc = _check_ordering(proto_peak_k, EXPECTED_THR_ORDER["fig6"])
-
-    # Paper-exact peaks (TPS): Achilles=95, Chained_Raftel=92, Raftel=84, Hotstuff=44
-    paper_peaks = {"Raftel": 84, "Chained_Raftel": 92, "Achilles": 95, "Hotstuff": 44}
-    return {"status": "ok", "ordering_ok": ok, "ordering_desc": desc,
-            "proto_peak": proto_peak, "paper_peaks": paper_peaks, "rows": rows, "ref": ref}
-
-
 # ---------------------------------------------------------------------------
 # Events timeline
 # ---------------------------------------------------------------------------
@@ -344,17 +308,6 @@ def _claim_card(fig_id: str, title: str, summary: dict) -> str:
         extra = (f"<div class='card-extra'>S1 at f=32: measured {measured:.1f} kTPS "
                  f"(paper 31.5 kTPS, {delta_pct:.0f}% deviation)</div>")
 
-    # Extra for fig6: peak comparison
-    if fig_id == "fig6" and summary.get("proto_peak"):
-        lines = []
-        for proto, paper_tps in sorted(summary.get("paper_peaks", {}).items()):
-            meas = summary["proto_peak"].get(proto)
-            if meas is not None:
-                delta = abs(meas - paper_tps) / paper_tps * 100
-                lines.append(f"{proto}: {meas:.0f} TPS (paper {paper_tps} TPS, Δ{delta:.0f}%)")
-        if lines:
-            extra = "<div class='card-extra'>" + " &nbsp;·&nbsp; ".join(lines) + "</div>"
-
     return f"""<div class="claim-card">
   <div class="card-label">{title}</div>
   <div class="card-ordering">{ordering_line}</div>
@@ -424,32 +377,6 @@ def _detail_table_fig4(summary: dict) -> str:
     return html
 
 
-def _detail_table_fig6(summary: dict) -> str:
-    rows = summary.get("rows", [])
-    ref = summary.get("ref", {})
-    if not rows:
-        return ""
-    html = ("<table><tr><th>Protocol</th><th>Clients</th>"
-            "<th>Thr (TPS)</th><th>Ref thr (TPS)</th>"
-            "<th>Lat avg (ms)</th></tr>\n")
-    for row in rows:
-        parts = row.get("_parts", [])
-        if len(parts) < 5 or parts[0] == "protocol":
-            continue
-        try:
-            protocol = parts[0]
-            clients = parts[1]
-            thr_tps = f"{float(parts[3]) * 1000:.1f}"
-            lat = f"{float(parts[4]):.0f}"
-            r = ref.get((protocol, clients))
-            ref_thr = f"{r['thr'] * 1000:.1f}" if r else "—"
-        except (ValueError, IndexError):
-            continue
-        html += f"<tr><td>{protocol}</td><td>{clients}</td><td>{thr_tps}</td><td>{ref_thr}</td><td>{lat}</td></tr>\n"
-    html += "</table>"
-    return html
-
-
 def _config_table(fig_id: str) -> str:
     configs = {
         "fig3": [
@@ -471,18 +398,6 @@ def _config_table(fig_id: str) -> str:
             ("SGX mode", "SIM"),
             ("Warm-up", "5 views per config point, result discarded"),
         ],
-        "fig6": [
-            ("Protocols", "Raftel, Chained_Raftel, Achilles, Hotstuff, Basic-Damysus"),
-            ("Faults (f)", "8 (n=25)"),
-            ("TEE topology", "Raftel and Chained_Raftel: all replicas; other protocols: defaults"),
-            ("Workload", "100% SET, keyspace=10000"),
-            ("Value size", "1024 B (1 KB) — §7.6"),
-            ("PAYLOAD_SIZE", "1100 B (key + 1024 + 14-byte header ≤ 1100)"),
-            ("Client sweep", "1, 2, 4, 8, 16, 32 clients"),
-            ("Repeats", "3 per (protocol, clients)"),
-            ("Network", "LAN — no injected netem delay"),
-            ("SGX mode", "SIM"),
-        ],
     }
     rows = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in configs.get(fig_id, []))
     return f"<table><tr><th>Parameter</th><th>Value</th></tr>{rows}</table>"
@@ -496,9 +411,6 @@ def _claims_text(fig_id: str) -> str:
         "fig4": ("§7.3 — TEE leadership and a full TEE quorum (S1) yield the highest throughput "
                  "and lowest latency. Removing either degrades performance: S1 > S2 ≥ S3 > S4 "
                  "for throughput; S1 ≤ S2 ≤ S3 ≤ S4 for latency. S1 at f=32 achieves 31.5 kTPS."),
-        "fig6": ("§7.6 — Redis KV end-to-end peak throughput (WAN, f=8): Achilles 95 TPS, "
-                 "Chained_Raftel 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS. Protocol ordering consistent "
-                 "with Figs 3 and 4 across all client counts."),
     }
     return claims.get(fig_id, "")
 
@@ -523,7 +435,7 @@ def build_report(run_dir: Path) -> str:
     status = manifest.get("status", "unknown")
     started = manifest.get("started_at", "")
     finished = manifest.get("finished_at", "")
-    figs = manifest.get("figs", ["fig3", "fig4", "fig6"])
+    figs = manifest.get("figs", ["fig3", "fig4"])
     cluster_ips = manifest.get("cluster_ips", [])
     failed_figs = manifest.get("failed_figs", [])
 
@@ -559,24 +471,21 @@ def build_report(run_dir: Path) -> str:
     summaries = {
         "fig3": _fig3_summary(_load_reference("fig3"), run_dir / "stats" / "fig3.txt"),
         "fig4": _fig4_summary(_load_reference("fig4"), run_dir / "stats" / "fig4.txt"),
-        "fig6": _fig6_summary(_load_reference("fig6"), run_dir / "stats" / "fig6.txt"),
     }
 
     FIG_TITLES = {
         "fig3": "Figure 3 — WAN Scalability",
         "fig4": "Figure 4 — LAN Leader / Quorum Configurations",
-        "fig6": "Figure 6 — Redis KV End-to-End (LAN, modified)",
     }
     DETAIL_FNS = {
         "fig3": _detail_table_fig3,
         "fig4": _detail_table_fig4,
-        "fig6": _detail_table_fig6,
     }
 
     # Claim cards (top summary)
     claim_cards_html = "\n".join(
         _claim_card(fig, FIG_TITLES.get(fig, fig), summaries.get(fig, {"status": "no_data"}))
-        for fig in ["fig3", "fig4", "fig6"]
+        for fig in ["fig3", "fig4"]
     )
 
     # Figure sections
@@ -824,7 +733,7 @@ def main():
 
     # Run plot scripts first
     import os
-    EXP_MAP = {"fig3": "experiment1", "fig4": "experiment2", "fig6": "experiment3"}
+    EXP_MAP = {"fig3": "experiment1", "fig4": "experiment2"}
     for fig, exp in EXP_MAP.items():
         plot_script = REPO / "scripts" / f"plot_{fig}.py"
         if plot_script.exists():

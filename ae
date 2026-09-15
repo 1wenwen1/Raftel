@@ -6,7 +6,7 @@ from __future__ import annotations
 Usage:
   ./ae doctor [--profile paper|smoke]
   ./ae smoke
-  ./ae run <fig3|fig4|fig6|all> [--scale full|mini]
+  ./ae run <fig3|fig4|all> [--scale full|mini]
   ./ae report [RUN_ID]
   ./ae status [RUN_ID]
   ./ae cloud <up|init|check|down> [--count N]
@@ -29,17 +29,14 @@ DEPLOYMENT_DIR = REPO / "deployment"
 SCRIPTS = {
     "fig3": REPO / "experiments_reproduction" / "experiment1" / "script" / "run_wan.sh",
     "fig4": REPO / "experiments_reproduction" / "experiment2" / "script" / "run_lan.sh",
-    "fig6": REPO / "experiments_reproduction" / "experiment3" / "script" / "run_redis_wan.sh",
 }
 PLOT_SCRIPTS = {
     "fig3": REPO / "scripts" / "plot_fig3.py",
     "fig4": REPO / "scripts" / "plot_fig4.py",
-    "fig6": REPO / "scripts" / "plot_fig6.py",
 }
 STATS_FILES = {
     "fig3": REPO / "experiments_reproduction" / "experiment1" / "stats.txt",
     "fig4": REPO / "experiments_reproduction" / "experiment2" / "stats.txt",
-    "fig6": REPO / "experiments_reproduction" / "experiment3" / "stats.txt",
 }
 REPORT_SCRIPT = REPO / "scripts" / "gen_report.py"
 
@@ -47,8 +44,6 @@ REPORT_SCRIPT = REPO / "scripts" / "gen_report.py"
 MINI_SCALE_ENV = {
     "AE_SCALE": "mini",
     "AE_FAULT_VALUES": "1 2 4",        # subset of the full f sweep
-    "AE_LOAD_CLIENTS": "1 4 16",       # subset of Fig6 load sweep
-    "AE_REPEATS": "1",
 }
 
 
@@ -238,7 +233,7 @@ def cmd_smoke(args) -> int:
 
 def cmd_run(args) -> int:
     """Run one or all experiments and produce a run directory."""
-    figs = ["fig3", "fig4", "fig6"] if args.fig == "all" else [args.fig]
+    figs = ["fig3", "fig4"] if args.fig == "all" else [args.fig]
     scale = getattr(args, "scale", "full")
     run_id = run_id_new()
     rd = run_dir(run_id)
@@ -413,11 +408,6 @@ def cmd_cloud(args) -> int:
             check_cmd = (
                 "test -c /dev/sgx_enclave && echo sgx-hw:available || echo sgx-hw:optional-SIM; "
                 "test -d /opt/intel/sgxsdk && echo sdk:ok || echo sdk:MISSING; "
-                "command -v redis-server >/dev/null && echo redis:ok || echo redis:MISSING; "
-                # AE (§六): hiredis is required for experiment3 Redis builds; check both
-                # the header (libhiredis-dev) and the shared library.
-                "pkg-config --exists hiredis 2>/dev/null && echo hiredis:ok || "
-                "  (test -f /usr/include/hiredis/hiredis.h && echo hiredis:ok || echo hiredis:MISSING); "
                 "(test -f /root/Raftel/salticidae/lib/libsalticidae.a || "
                 " test -f /usr/local/lib/libsalticidae.a) && "
                 "echo salticidae:ok || echo salticidae:MISSING"
@@ -477,7 +467,7 @@ def main():
 
     # run
     p_run = sub.add_parser("run", help="Run experiment(s)")
-    p_run.add_argument("fig", choices=("fig3", "fig4", "fig6", "all"))
+    p_run.add_argument("fig", choices=("fig3", "fig4", "all"))
     p_run.add_argument("--scale", choices=("full", "mini"), default="full",
                        help="full=paper scale (hours); mini=reduced scale for trend check (~30 min)")
     p_run.set_defaults(func=cmd_run)

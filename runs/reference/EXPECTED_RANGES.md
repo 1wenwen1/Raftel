@@ -21,11 +21,6 @@ Replace with author-provided exact values when available.
 
 **Fig 4 latency:** S1 ≤ S2 ≤ S3 ≤ S4
 
-**Fig 6 peak throughput:** Achilles ≥ Chained_Raftel ≥ Raftel > Hotstuff
-
 ## Paper-Exact Values (from paper text)
 
 - Fig 4 S1 at f=32: **31.5 kTPS** (§7.1)
-- Fig 6 peak: Achilles=**95 TPS**, Chained_Raftel=**92 TPS**, Raftel=**84 TPS**, Hotstuff=**44 TPS** (§7.6)
-
-Note: Fig 6 reference CSV stores values in kTPS (divide TPS by 1000).

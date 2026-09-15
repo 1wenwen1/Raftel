@@ -2,7 +2,7 @@
 
 Artifact for ["Breaking Fault Lines: Unifying BFT Consensus in a Partially Trusted World"](doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a_Partially_Trusted_World.pdf), accepted at EuroSys 2027.
 
-Raftel is an SGX-TEE-assisted BFT consensus protocol for partially trusted environments, where only a subset of replicas holds a TEE. It builds on the [Damysus](https://github.com/vrahli/damysus) codebase and shows that a minority TEE quorum suffices for safety and liveness, with throughput and latency competitive with state-of-the-art TEE-free BFT protocols. This artifact reproduces Figures 3, 4, and 6 from the paper: WAN scalability across six protocols, LAN TEE-leader and quorum-size effects, and Redis end-to-end performance.
+Raftel is an SGX-TEE-assisted BFT consensus protocol for partially trusted environments, where only a subset of replicas holds a TEE. It builds on the [Damysus](https://github.com/vrahli/damysus) codebase and shows that a minority TEE quorum suffices for safety and liveness, with throughput and latency competitive with state-of-the-art TEE-free BFT protocols. This artifact reproduces Figures 3 and 4 from the paper: WAN scalability across six protocols and LAN TEE-leader and quorum-size effects.
 
 See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appendix and [doc/CODE_OVERVIEW.md](doc/CODE_OVERVIEW.md) for the code structure and a description of changes relative to Damysus.
 
@@ -32,7 +32,6 @@ See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appe
 - Intel SGX SDK 2.23.100.2 (bundled in `deployment/sourcefile/archive.tar.gz`)
 - Python ≥ 3.8 with packages: `matplotlib paramiko scp aliyun-python-sdk-core`
 - Salticidae (Git submodule): `git submodule update --init && (cd salticidae; cmake . -DCMAKE_INSTALL_PREFIX=.; make; make install)`
-- hiredis + Redis (for experiment 3): `sudo apt-get install -y libhiredis-dev redis-server`
 - SSH private key `TShard` at `/root/Raftel/TShard` (reviewers: distributed via HotCRP)
 
 The cloud workflow provisions 10 hosts and reuses them for all experiments. `run.py`
@@ -70,7 +69,7 @@ tmux list-sessions
 tmux attach -t setup1
 # Detach without stopping it: Ctrl-b, then d
 
-# 3. Verify SGX, SDK, Redis, hiredis, Salticidae, SSH, and coordinator setup
+# 3. Verify SGX, SDK, Salticidae, SSH, and coordinator setup
 ./ae cloud check
 ./ae doctor --profile paper
 
@@ -80,14 +79,12 @@ python3 run.py --p0 --faults 1 --totaltee 2
 # 5. Run experiments and then generate their reports
 ./ae run fig3   # Experiment 1 / Figure 3 (~3 h)
 ./ae run fig4   # Experiment 2 / Figure 4 (~2 h)
-./ae run fig6   # Experiment 3 / Figure 6 (~2 h)
 ```
 # 6. Generate and view the figures manually
 
 ```bash
 python3 scripts/plot_fig3.py
 python3 scripts/plot_fig4.py
-python3 scripts/plot_fig6.py
 ```
 
 The generated PNG files are available at:
@@ -95,7 +92,6 @@ The generated PNG files are available at:
 ```text
 experiments_reproduction/experiment1/results/fig3.png
 experiments_reproduction/experiment2/results/fig4.png
-experiments_reproduction/experiment3/results/fig6.png
 ```
 # 7. Release instances when done
 ```bash
@@ -106,7 +102,6 @@ The raw summary data can be inspected directly after each experiment:
 
 - Figure 3: `experiments_reproduction/experiment1/stats.txt`
 - Figure 4: `experiments_reproduction/experiment2/stats.txt`
-- Figure 6: `experiments_reproduction/experiment3/stats.txt`
 
  The raw data has the form
 `configuration_f<number-of-faults>, throughput_kTPS, latency_ms`. For example:
@@ -117,9 +112,7 @@ Chained_Raftel_f16, 0.8582167777777777, 830.3356493055554
 
 This means that the **Chained_Raftel** protocol was measured with 16 tolerated faults,
 giving a throughput of `0.8582167777777777` kTPS and a latency of
-`830.3356493055554` ms. Figure 6 uses a CSV header because it additionally
-records the client load, number of successful repeats, end-to-end latency
-percentiles, and number of completed requests.
+`830.3356493055554` ms.
 
 
 ---
@@ -145,14 +138,9 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
 # 4. Verify all dependencies are ready on every node (~2 min)
 ./ae cloud check
 
-# 5. Run all experiments and generate the report (~7 h)
-./ae run all
-./ae report
-
-# Alternatively, run an individual experiment and then generate its report
+# 5. Run all experiment and then generate its report
 ./ae run fig3   # Experiment 1 / Figure 3(~ 3 h)
 ./ae run fig4   # Experiment 2 / Figure 4(~ 2 h)
-./ae run fig6   # Experiment 3 / Figure 6(~ 2 h)
 
 # 6. Release instances when done
 ./ae cloud down
@@ -170,11 +158,10 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
 |---|---|---|
 | Fig 3 (WAN scalability) | Achilles ≥ Chained_Raftel ≥ Raftel > Hotstuff ≈ Raftel-Worst; Raftel latency ≤ Chained_Raftel < Basic-Damysus | Full reproduction: ±40% absolute PASS band, ordering must match |
 | Fig 4 (LAN TEE configs) | S1 > S2 ≥ S3 > S4 throughput; S1 ≤ S2 ≤ S3 ≤ S4 latency; S1 at f=32 = 31.5 kTPS | Full reproduction: same criteria |
-| Fig 6 (Redis E2E LAN, modified) | Local experiment output; the paper's WAN reference values are not directly comparable | Compare protocols within the same LAN run |
 
 Expected errors: SGX attestation overhead and cloud network jitter typically produce ±10–20% variation from the paper numbers. The ±40% PASS band accounts for inter-run variance across different AE windows.
 
-Reference values are in `runs/reference/fig{3,4,6}.csv`; PASS/WARN/FAIL criteria are in `runs/reference/EXPECTED_RANGES.md`.
+Reference values are in `runs/reference/fig{3,4}.csv`; PASS/WARN/FAIL criteria are in `runs/reference/EXPECTED_RANGES.md`.
 
 ---
 
@@ -184,9 +171,8 @@ Reference values are in `runs/reference/fig{3,4,6}.csv`; PASS/WARN/FAIL criteria
 |---|---|---|---|
 | Figure 3 | WAN scalability | `experiments_reproduction/experiment1/script/run_wan.sh` | `experiment1/stats.txt` |
 | Figure 4 | LAN TEE configs | `experiments_reproduction/experiment2/script/run_lan.sh` | `experiment2/stats.txt` |
-| Figure 6 | Redis E2E LAN (modified) | `experiments_reproduction/experiment3/script/run_redis_wan.sh` | `experiment3/stats.txt` |
 
-The Figure 3/4 scripts accept `AE_FAULT_VALUES`; the Figure 6 script accepts `AE_LOAD_CLIENTS` and `AE_REPEATS`. The AE CLI sets these variables for `--scale mini`. All experiment scripts pass `--sgx-mode SIM` to `run.py`.
+The Figure 3/4 scripts accept `AE_FAULT_VALUES`. The AE CLI sets this variable for `--scale mini`. All experiment scripts pass `--sgx-mode SIM` to `run.py`.
 
 ---
 
@@ -195,7 +181,7 @@ The Figure 3/4 scripts accept `AE_FAULT_VALUES`; the Figure 6 script accepts `AE
 ```
 ./ae doctor [--profile paper|smoke]    # check environment, flag blockers
 ./ae smoke                             # local 4-node SIM smoke test (~5 min)
-./ae run <fig3|fig4|fig6|all> [--scale full|mini]
+./ae run <fig3|fig4|all> [--scale full|mini]
 ./ae report [RUN_ID]                   # generate figures + HTML report
 ./ae status [RUN_ID]                   # show run completion status
 ./ae cloud <up|init|check|down> [--count N]
@@ -211,7 +197,7 @@ Each `./ae run` creates `runs/<RUN_ID>/` with:
 - `manifest.json` — git commit, timestamp, cluster IPs, scale
 - `events.jsonl` — timestamped event log
 - `checksums.txt` — SHA256 of all scripts and `run.py`
-- `stats/fig3.txt`, `stats/fig4.txt`, `stats/fig6.txt` — snapshots of that run's statistics
+- `stats/fig3.txt`, `stats/fig4.txt` — snapshots of that run's statistics
 - `figures/` — auto-generated PDFs
 - `index.html` — standalone HTML report with reference comparisons and ordering checks
 
@@ -238,7 +224,7 @@ and `experiments_reproduction/experiment2/`.
 ```bash
 # System packages (coordinator and nodes)
 sudo apt-get install -y build-essential cmake git libssl-dev libuv1-dev \
-    pkg-config python3 python3-pip libhiredis-dev redis-server
+    pkg-config python3 python3-pip
 
 # Python packages (coordinator)
 pip3 install matplotlib paramiko scp aliyun-python-sdk-core
@@ -270,9 +256,3 @@ Verify that the SGX SDK is installed and sourced with
 
 **WAN netem setup fails on one node**
 The script exits immediately. Check SSH connectivity (`ssh -i TShard root@<IP>`) and verify that the node is listed in `ip_list`.
-
-**`./ae cloud check` reports `hiredis:MISSING` on a node**
-Run `ssh -i TShard root@<IP> 'apt-get install -y libhiredis-dev'` on the affected node. `./ae cloud init` should install it automatically; this indicates `init.sh` did not complete on that node.
-
-**Zero completions in experiment 3**
-Verify Redis is running on all nodes (`./ae cloud check` shows `redis:ok`) and that `ip_list` has at least 25 entries. The experiment scripts set `--payload 1100 --kv-value-len 1024` automatically; no manual adjustment is needed.

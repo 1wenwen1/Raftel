@@ -20,11 +20,9 @@ Raftel/
 ├── deployment/     Node provisioning and initialization scripts
 ├── experiments_reproduction/
 │   ├── experiment1/script/run_wan.sh       Figure 3
-│   ├── experiment2/script/run_lan.sh       Figure 4
-│   └── experiment3/script/run_redis_wan.sh Figure 6
-│       script/summarize_e2e.py
+│   └── experiment2/script/run_lan.sh       Figure 4
 ├── scripts/
-│   ├── plot_fig3.py / plot_fig4.py / plot_fig6.py
+│   ├── plot_fig3.py / plot_fig4.py
 │   └── gen_report.py
 └── runs/reference/   Approximate reference values for PASS/WARN/FAIL
 ```
@@ -108,28 +106,12 @@ replica `leader_id` rather than rotating by view.  Figure 4 uses this to
 separate the effect of TEE leadership (S1/S2, leader_id=0) from non-TEE
 leadership (S3/S4, leader_id=f+1).
 
-### 4. Redis KV application path
-
-`App/KVApp.cpp` implements a Redis-backed key-value store behind the same
-client interface.  `KVAppCodec::encode` serialises a `(key, value, op-type,
-14-byte header)` tuple into the fixed `PAYLOAD_SIZE` byte buffer.  If the
-tuple exceeds `PAYLOAD_SIZE`, `encode` returns `false` silently and the
-request is dropped.
-
-**AE fix (§7.6):** The original script passed `--payload 256
---kv-value-len 1024`; with keyspace=10000 (max key length 5 bytes),
-`5+1024+14=1043 > 256`, so every request was silently dropped.  The correct
-values are `--payload 1100 --kv-value-len 1024`.
-
----
-
 ## Paper Figure → Code Path
 
 | Figure | Script | Key parameters | What it measures |
 |---|---|---|---|
 | Fig 3 | `run_wan.sh` | f∈{1…32}, 6 protocols, 50ms WAN | WAN scalability: throughput & latency vs. f |
 | Fig 4 | `run_lan.sh` | f∈{1…32}, 4 TEE configs, LAN | Effect of TEE leader + TEE quorum size |
-| Fig 6 | `run_redis_wan.sh` | f=8, clients∈{1…32}, 3 repeats, LAN (no netem) | Redis E2E throughput-latency curve |
 
 ---
 
