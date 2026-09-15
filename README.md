@@ -79,22 +79,21 @@ python3 run.py --p0 --faults 1 --totaltee 2
 # 5. Run experiments and then generate their reports
 ./ae run fig3   # Experiment 1 / Figure 3 (~3 h)
 ./ae run fig4   # Experiment 2 / Figure 4 (~2 h)
-```
+
 # 6. Generate and view the figures manually
 
-```bash
+bash
 python3 scripts/plot_fig3.py
 python3 scripts/plot_fig4.py
-```
 
-The generated PNG files are available at:
 
-```text
+#The generated PNG files are available at:
+
 experiments_reproduction/experiment1/results/fig3.png
 experiments_reproduction/experiment2/results/fig4.png
-```
+
 # 7. Release instances when done
-```bash
+bash
 ./ae cloud down
 ```
 
