@@ -4,7 +4,7 @@ This experiment corresponds to Figure 3 in the paper. It adds a 50 ms `netem` de
 
 ## Configuration
 
-- Protocol configurations: Raftel (`p0`), Chained (`p1`), Achilles (`p2`), Hotstuff (`p3`), Basic-Damysus (`p4`), and Raftel-Worst (`p0` with the worst-case leader configuration)
+- Protocol configurations: Raftel (`p0`), Chained_Raftel (`p1`), Achilles (`p2`), Hotstuff (`p3`), Basic-Damysus (`p4`), and Raftel-Worst (`p0` with the worst-case leader configuration)
 - Fault thresholds: `1`, `2`, `4`, `8`, `16`, and `32`
 - Fixed parameters: `--batchsize 400 --payload 256`
 - Repetitions: one run per protocol/fault-threshold combination

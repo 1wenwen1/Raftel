@@ -397,9 +397,14 @@ def cmd_cloud(args) -> int:
         return 0
 
     elif action == "check":
-        ips = read_ip_list()
+        ip_file = ALIYUN_DIR / "priv_ip.txt"
+        if ip_file.exists():
+            with open(ip_file) as f:
+                ips = [line.strip() for line in f if line.strip()]
+        else:
+            ips = []
         if not ips:
-            print("ip_list is empty — run: ./ae cloud up && ./ae cloud init")
+            print("aliyun/priv_ip.txt is empty or missing — run: ./ae cloud up")
             return 1
         print(f"Checking {len(ips)} host(s)...")
         ssh_key = REPO / "TShard"
@@ -413,7 +418,9 @@ def cmd_cloud(args) -> int:
                 # the header (libhiredis-dev) and the shared library.
                 "pkg-config --exists hiredis 2>/dev/null && echo hiredis:ok || "
                 "  (test -f /usr/include/hiredis/hiredis.h && echo hiredis:ok || echo hiredis:MISSING); "
-                "test -f /usr/local/lib/libsalticidae.a && echo salticidae:ok || echo salticidae:MISSING"
+                "(test -f /root/Raftel/salticidae/lib/libsalticidae.a || "
+                " test -f /usr/local/lib/libsalticidae.a) && "
+                "echo salticidae:ok || echo salticidae:MISSING"
             )
             result = subprocess.run(
                 ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",

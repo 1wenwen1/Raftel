@@ -38,12 +38,12 @@ GITHUB_REPO = "https://github.com/1wenwen1/Raftel"
 # For each figure we define the expected ranking as a list of lists;
 # protocols within the same inner list are considered equivalent.
 EXPECTED_THR_ORDER = {
-    "fig3": [["Achilles"], ["Chained"], ["Raftel"], ["Hotstuff", "Basic-Damysus", "Raftel-Worst"]],
+    "fig3": [["Achilles"], ["Chained_Raftel"], ["Raftel"], ["Hotstuff", "Basic-Damysus", "Raftel-Worst"]],
     "fig4": [["set1"], ["set2", "set3"], ["set4"]],
-    "fig6": [["Achilles"], ["Chained"], ["Raftel"], ["Basic-Damysus"], ["Hotstuff"]],
+    "fig6": [["Achilles"], ["Chained_Raftel"], ["Raftel"], ["Basic-Damysus"], ["Hotstuff"]],
 }
 EXPECTED_LAT_ORDER = {
-    "fig3": [["Raftel", "Chained"], ["Basic-Damysus"], ["Hotstuff", "Raftel-Worst"]],
+    "fig3": [["Raftel", "Chained_Raftel"], ["Basic-Damysus"], ["Hotstuff", "Raftel-Worst"]],
     "fig4": [["set1"], ["set2"], ["set3"], ["set4"]],
 }
 
@@ -252,8 +252,8 @@ def _fig6_summary(ref: dict, stats_file: Path) -> dict:
     proto_peak_k = {p: v / 1000.0 for p, v in proto_peak.items()}
     ok, desc = _check_ordering(proto_peak_k, EXPECTED_THR_ORDER["fig6"])
 
-    # Paper-exact peaks (TPS): Achilles=95, Chained=92, Raftel=84, Hotstuff=44
-    paper_peaks = {"Raftel": 84, "Chained": 92, "Achilles": 95, "Hotstuff": 44}
+    # Paper-exact peaks (TPS): Achilles=95, Chained_Raftel=92, Raftel=84, Hotstuff=44
+    paper_peaks = {"Raftel": 84, "Chained_Raftel": 92, "Achilles": 95, "Hotstuff": 44}
     return {"status": "ok", "ordering_ok": ok, "ordering_desc": desc,
             "proto_peak": proto_peak, "paper_peaks": paper_peaks, "rows": rows, "ref": ref}
 
@@ -453,7 +453,7 @@ def _detail_table_fig6(summary: dict) -> str:
 def _config_table(fig_id: str) -> str:
     configs = {
         "fig3": [
-            ("Protocols", "Raftel, Chained, Achilles, Hotstuff, Basic-Damysus, Raftel-Worst"),
+            ("Protocols", "Raftel, Chained_Raftel, Achilles, Hotstuff, Basic-Damysus, Raftel-Worst"),
             ("Fault values (f)", "1, 2, 4, 8, 16, 32"),
             ("Batch size", "400 tx/block"),
             ("Payload", "256 B"),
@@ -472,17 +472,16 @@ def _config_table(fig_id: str) -> str:
             ("Warm-up", "5 views per config point, result discarded"),
         ],
         "fig6": [
-            ("Protocols", "Raftel, Chained, Achilles, Hotstuff, Basic-Damysus"),
+            ("Protocols", "Raftel, Chained_Raftel, Achilles, Hotstuff, Basic-Damysus"),
             ("Faults (f)", "8 (n=25)"),
-            ("Raftel totaltee", "9"),
+            ("TEE topology", "Raftel and Chained_Raftel: all replicas; other protocols: defaults"),
             ("Workload", "100% SET, keyspace=10000"),
             ("Value size", "1024 B (1 KB) — §7.6"),
             ("PAYLOAD_SIZE", "1100 B (key + 1024 + 14-byte header ≤ 1100)"),
             ("Client sweep", "1, 2, 4, 8, 16, 32 clients"),
             ("Repeats", "3 per (protocol, clients)"),
-            ("Network", "WAN — 50 ms one-way netem (100 ms RTT)"),
+            ("Network", "LAN — no injected netem delay"),
             ("SGX mode", "SIM"),
-            ("Warm-up", "5 views per (protocol, clients) point, result discarded"),
         ],
     }
     rows = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in configs.get(fig_id, []))
@@ -491,14 +490,14 @@ def _config_table(fig_id: str) -> str:
 
 def _claims_text(fig_id: str) -> str:
     claims = {
-        "fig3": ("§7.2 — Raftel achieves throughput comparable to Chained and significantly "
+        "fig3": ("§7.2 — Raftel achieves throughput comparable to Chained_Raftel and significantly "
                  "better than Hotstuff and Raftel-Worst, while its latency is lower than or "
-                 "equal to Chained. Achilles leads in throughput due to its smaller 2f+1 quorum."),
+                 "equal to Chained_Raftel. Achilles leads in throughput due to its smaller 2f+1 quorum."),
         "fig4": ("§7.3 — TEE leadership and a full TEE quorum (S1) yield the highest throughput "
                  "and lowest latency. Removing either degrades performance: S1 > S2 ≥ S3 > S4 "
                  "for throughput; S1 ≤ S2 ≤ S3 ≤ S4 for latency. S1 at f=32 achieves 31.5 kTPS."),
         "fig6": ("§7.6 — Redis KV end-to-end peak throughput (WAN, f=8): Achilles 95 TPS, "
-                 "Chained 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS. Protocol ordering consistent "
+                 "Chained_Raftel 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS. Protocol ordering consistent "
                  "with Figs 3 and 4 across all client counts."),
     }
     return claims.get(fig_id, "")
@@ -566,7 +565,7 @@ def build_report(run_dir: Path) -> str:
     FIG_TITLES = {
         "fig3": "Figure 3 — WAN Scalability",
         "fig4": "Figure 4 — LAN Leader / Quorum Configurations",
-        "fig6": "Figure 6 — Redis KV End-to-End (WAN)",
+        "fig6": "Figure 6 — Redis KV End-to-End (LAN, modified)",
     }
     DETAIL_FNS = {
         "fig3": _detail_table_fig3,

@@ -61,31 +61,6 @@ done
 
 : > "${STATS_FILE}"
 
-# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
-# the result.  The warm-up is intentionally not configurable so that the paper
-# parameters remain the only thing that controls the measurement.
-warmup_one() {
-    local set_name="$1"
-    local faults="$2"
-    local totaltee="$3"
-    local leader_id="$4"
-
-    echo "[$(date --iso-8601=seconds)] WARMUP ${set_name}_f${faults} (5 views, result discarded)"
-    (
-        cd "${REPO}"
-        python3 run.py --p0 \
-            --sgx-mode SIM \
-            --experiment-number 2 \
-            --batchsize 400 \
-            --payload 256 \
-            --faults "${faults}" \
-            --totaltee "${totaltee}" \
-            --views 5 \
-            --leader-mode fixed \
-            --leader-id "${leader_id}"
-    )
-}
-
 run_one() {
     local set_name="$1"
     local faults="$2"
@@ -107,13 +82,6 @@ run_one() {
     esac
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
-
-    # AE (§三): 5-view warm-up before the measured run
-    if ! warmup_one "${set_name}" "${faults}" "${totaltee}" "${leader_id}" \
-        >"${run_log_dir}/warmup.log" 2>&1; then
-        echo "ERROR: warm-up failed for ${label}; measurement skipped" >&2
-        return 1
-    fi
 
     echo "[$(date --iso-8601=seconds)] START ${label}: totaltee=${totaltee}, leader=${leader_id}"
 

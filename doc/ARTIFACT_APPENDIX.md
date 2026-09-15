@@ -26,7 +26,7 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 | AE CLI | `ae` (executable Python script) |
 | Figure 3 script (WAN scalability) | `experiments_reproduction/experiment1/script/run_wan.sh` |
 | Figure 4 script (LAN TEE configs) | `experiments_reproduction/experiment2/script/run_lan.sh` |
-| Figure 6 script (Redis E2E WAN) | `experiments_reproduction/experiment3/script/run_redis_wan.sh` |
+| Figure 6 script (Redis E2E LAN, modified) | `experiments_reproduction/experiment3/script/run_redis_wan.sh` |
 | Plot scripts | `scripts/plot_fig{3,4,6}.py` |
 | HTML report generator | `scripts/gen_report.py` |
 | Reference values (PDF-read approximations) | `runs/reference/fig{3,4,6}.csv` |
@@ -49,10 +49,11 @@ Paper DOI / preprint: see `doc/Breaking_Fault_Lines__Unifying_BFT_Consensus_in_a
 - SGX-capable hardware is optional. All delivered experiment scripts run in
   SGX simulation mode; the Intel SGX SDK and SGX SSL are still required.
 - **Network**: 10 Gbps private network between hosts (Alibaba Cloud VPC default).
-  WAN experiments emulate 50 ms one-way delay using `tc netem` on each host.
+  Figure 3 emulates 50 ms one-way WAN delay using `tc netem`; the modified
+  Figure 6 experiment clears netem and uses the hosts' native LAN.
 
-The cloud workflow uses 7 reusable hosts. `run.py` assigns up to 15 replicas to
-each host using distinct ports, for a total capacity of 105 replicas. Figure 3
+The cloud workflow uses 10 reusable hosts. `run.py` assigns up to 15 replicas to
+each host using distinct ports, for a total capacity of 150 replicas. Figure 3
 and Figure 4 need at most 97 replicas (`f=32`, `3f+1`), while Figure 6 needs 25.
 This co-located layout is operationally convenient but is not equivalent to
 one replica per physical host; results include same-host resource contention.
@@ -83,9 +84,9 @@ and by the manual steps in the README on the coordinator.
 
 | Figure | Claim | Expected |
 |---|---|---|
-| Fig 3 | WAN scalability: Achilles ≥ Chained ≥ Raftel > Hotstuff ≈ Raftel-Worst | **Full reproduction** — all six protocols at f∈{1,2,4,8,16,32}. Absolute values within ±40% of reference; ordering must match. |
+| Fig 3 | WAN scalability: Achilles ≥ Chained_Raftel ≥ Raftel > Hotstuff ≈ Raftel-Worst | **Full reproduction** — all six protocols at f∈{1,2,4,8,16,32}. Absolute values within ±40% of reference; ordering must match. |
 | Fig 4 | LAN TEE-config effect: S1 > S2 ≥ S3 > S4 throughput, S1 ≤ … ≤ S4 latency | **Full reproduction** — four configurations at f∈{1,2,4,8,16,32}. Paper-exact: S1 at f=32 = 31.5 kTPS. |
-| Fig 6 | Redis E2E: Achilles 95 TPS, Chained 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS (peak) | **Full reproduction** — load sweep clients∈{1,2,4,8,16,32}, 3 repeats. Absolute values within ±40%; ordering must match. |
+| Fig 6 | Redis E2E LAN (modified) | Load sweep clients∈{1,2,4,8,16,32}, 3 repeats. Paper WAN absolute values are not directly comparable. |
 
 Absolute throughput and latency numbers depend on simulation overhead, cloud
 network jitter, and instance placement within the Alibaba Cloud region.
@@ -114,7 +115,7 @@ Open `runs/<RUN_ID>/index.html` for reproduced figures, reference comparisons, a
 cp aliyun/config.example.json aliyun/config.json   # edit with your account
 
 # 2. Provision and initialise nodes
-./ae cloud up --count 7
+./ae cloud up --count 10
 ./ae cloud init
 ./ae cloud check
 

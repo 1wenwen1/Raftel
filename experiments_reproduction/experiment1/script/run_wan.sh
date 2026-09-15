@@ -15,7 +15,7 @@ IP_LIST_FILE="${REPO}/ip_list"
 STATS_FILE="${EXP_DIR}/stats.txt"
 
 protocol_flags=(p0 p1 p2 p3 p4 p0)
-protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus Raftel-Worst)
+protocol_names=(Raftel Chained_Raftel Achilles Hotstuff Basic-Damysus Raftel-Worst)
 read -r -a fault_values <<< "${AE_FAULT_VALUES:-1 2 4 8 16 32}"
 total_runs=$(( ${#protocol_flags[@]} * ${#fault_values[@]} ))
 
@@ -71,36 +71,6 @@ done
 
 : > "${STATS_FILE}"
 
-# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
-# the result.  The warm-up is intentionally not configurable so that the paper
-# parameters remain the only thing that controls the measurement.
-warmup_one() {
-    local flag="$1"
-    local protocol="$2"
-    local faults="$3"
-    local -a protocol_args=()
-
-    if [[ "${protocol}" == "Raftel-Worst" ]]; then
-        protocol_args=(--totaltee 0 --leader-mode fixed --leader-id "$((faults + 1))")
-    elif [[ "${flag}" == "p0" ]]; then
-        protocol_args=(--totaltee "$((faults + 1))")
-    fi
-
-    echo "[$(date --iso-8601=seconds)] WARMUP ${protocol}_f${faults} (5 views, result discarded)"
-    (
-        cd "${REPO}"
-        python3 run.py "--${flag}" \
-            --sgx-mode SIM \
-            --experiment-number 1 \
-            --batchsize 400 \
-            --payload 256 \
-            --faults "${faults}" \
-            --repeats 1 \
-            --views 5 \
-            "${protocol_args[@]}"
-    )
-}
-
 run_one() {
     local flag="$1"
     local protocol="$2"
@@ -124,13 +94,6 @@ run_one() {
     fi
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
-
-    # AE (§三): 5-view warm-up before the measured run
-    if ! warmup_one "${flag}" "${protocol}" "${faults}" \
-        >"${run_log_dir}/warmup.log" 2>&1; then
-        echo "ERROR: warm-up failed for ${tag}; measurement skipped" >&2
-        return 1
-    fi
 
     echo "[$(date --iso-8601=seconds)] START ${tag}"
 

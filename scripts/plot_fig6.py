@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot Figure 6 (Redis WAN throughput-latency curve).
+"""Plot Figure 6 (Redis LAN throughput-latency curve).
 
 Input:  experiments_reproduction/experiment3/stats.txt
         (CSV format: protocol, load_clients, successful_repeats, metrics...)
@@ -43,13 +43,13 @@ def _apply_style():
 
 PROTOCOL_STYLES = {
     "Raftel":        {"color": "#4E79A7", "marker": "o", "linestyle": "-"},
-    "Chained":       {"color": "#F28E2B", "marker": "s", "linestyle": "-"},
+    "Chained_Raftel": {"color": "#F28E2B", "marker": "s", "linestyle": "-"},
     "Achilles":      {"color": "#59A14F", "marker": "^", "linestyle": "-"},
     "Hotstuff":      {"color": "#E15759", "marker": "D", "linestyle": "-"},
     "Basic-Damysus": {"color": "#76B7B2", "marker": "v", "linestyle": "-"},
 }
 
-PROTOCOL_ORDER = ["Achilles", "Chained", "Raftel", "Basic-Damysus", "Hotstuff"]
+PROTOCOL_ORDER = ["Achilles", "Chained_Raftel", "Raftel", "Basic-Damysus", "Hotstuff"]
 
 
 def parse_stats(stats_file: Path) -> dict:
@@ -102,7 +102,7 @@ def plot_fig6(stats_file: Path, out_pdf: Path) -> None:
 
     ax.set_xlabel("Throughput (TPS)")
     ax.set_ylabel("Average latency (ms)")
-    ax.set_title("Redis KV end-to-end (WAN, f=8)", pad=6)
+    ax.set_title("Redis KV end-to-end (LAN, f=8)", pad=6)
     ax.minorticks_on()
     ax.grid(which='major', alpha=0.5, linestyle='-', linewidth=0.7)
     ax.grid(which='minor', alpha=0.25, linestyle=':', linewidth=0.5)

@@ -9,7 +9,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IP_FILE="${PROJECT_ROOT}/aliyun/priv_ip.txt"
 SSH_USER="${SSH_USER:-root}"
 SSH_KEY="${SSH_KEY:-${PROJECT_ROOT}/TShard}"
-PARALLEL="${PARALLEL:-7}"
+PARALLEL="${PARALLEL:-10}"
 
 if [[ ! -f "${IP_FILE}" ]]; then
   echo "ERROR: IP list not found: ${IP_FILE}" >&2

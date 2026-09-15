@@ -38,7 +38,7 @@ Raftel/
 | Macro | Protocol | run.py flag |
 |---|---|---|
 | `BASIC_HYBRID_TEE` | Raftel | `--p0` |
-| `CHAINED_HYBRID_TEE` | Chained-Raftel | `--p1` |
+| `CHAINED_HYBRID_TEE` | Chained_Raftel | `--p1` |
 | `BASIC_ACHILLES` | Achilles | `--p2` |
 | `BASIC_HOTSTUFF` | Hotstuff | `--p3` |
 | `BASIC_DAMYSUS` | Basic-Damysus | `--p4` |
@@ -67,7 +67,7 @@ anew for each run.
 | File | Protocol | Role |
 |---|---|---|
 | `EnclaveComb.cpp` | Raftel | Trusted state machine: proposal validation, TEE signing, QC accumulation |
-| `EnclaveChComb.cpp` | Chained-Raftel | Same for the chained variant |
+| `EnclaveChComb.cpp` | Chained_Raftel | Same for the chained variant |
 | `EnclaveDamysus.cpp` | Basic-Damysus | Upstream Damysus enclave logic |
 | `EnclaveOP.cpp` | Hotstuff | Hotstuff enclave logic |
 | `EnclaveAchillesCh.cpp` | Achilles | Achilles enclave logic |
@@ -129,7 +129,7 @@ values are `--payload 1100 --kv-value-len 1024`.
 |---|---|---|---|
 | Fig 3 | `run_wan.sh` | f∈{1…32}, 6 protocols, 50ms WAN | WAN scalability: throughput & latency vs. f |
 | Fig 4 | `run_lan.sh` | f∈{1…32}, 4 TEE configs, LAN | Effect of TEE leader + TEE quorum size |
-| Fig 6 | `run_redis_wan.sh` | f=8, clients∈{1…32}, 3 repeats, 50ms WAN | Redis E2E throughput-latency curve |
+| Fig 6 | `run_redis_wan.sh` | f=8, clients∈{1…32}, 3 repeats, LAN (no netem) | Redis E2E throughput-latency curve |
 
 ---
 

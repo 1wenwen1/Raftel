@@ -16,7 +16,7 @@ STATS_FILE="${EXP_DIR}/stats.txt"
 PER_RUN_FILE="$(mktemp)"
 
 protocol_flags=(p0 p1 p2 p3 p4)
-protocol_names=(Raftel Chained Achilles Hotstuff Basic-Damysus)
+protocol_names=(Raftel Chained_Raftel Achilles Hotstuff Basic-Damysus)
 repeats="${AE_REPEATS:-3}"
 faults=8
 requested_totaltee=9
@@ -64,62 +64,23 @@ for dir in "${EXE_DIR}" "${LOG_DIR}" "${OUT_DIR}" "${RESULT_DIR}"; do
 done
 : > "${STATS_FILE}"
 
-remove_wan_delay() {
+ensure_lan_network() {
     local ip
     for ip in "${remote_ips[@]}"; do
         ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-            "sudo tc qdisc del dev eth0 root 2>/dev/null || true" || true
+            "sudo tc qdisc del dev eth0 root 2>/dev/null || true; ! tc qdisc show dev eth0 | grep -q netem" \
+            || { echo "ERROR: failed to clear netem on ${ip}" >&2; exit 1; }
     done
 }
 cleanup() {
-    remove_wan_delay
     rm -f "${PER_RUN_FILE}"
 }
 trap cleanup EXIT INT TERM
 
-echo "Configuring 50ms WAN delay on ${#remote_ips[@]} remote host(s)..."
-for ip in "${remote_ips[@]}"; do
-    # P0-4: WAN netem setup failures must be fatal — a silent skip means some
-    # node pairs have no delay, making the result invalid.
-    ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "root@${ip}" \
-        "sudo tc qdisc del dev eth0 root 2>/dev/null || true; sudo tc qdisc add dev eth0 root netem delay 50ms" \
-        || { echo "ERROR: failed to configure netem on ${ip}" >&2; exit 1; }
-done
+echo "Configuring LAN mode on ${#remote_ips[@]} remote host(s) (no netem delay)..."
+ensure_lan_network
 
 printf 'protocol,load_clients,repeat,e2e_throughput_ktps,e2e_latency_avg_ms,e2e_latency_p50_ms,e2e_latency_p95_ms,e2e_latency_p99_ms,num_completed,status\n' > "${PER_RUN_FILE}"
-
-# AE (§三): run a fixed 5-view warm-up before each measurement point and discard
-# the result.  The warm-up is intentionally not configurable so that the paper
-# parameters remain the only thing that controls the measurement.
-warmup_one() {
-    local flag="$1"
-    local protocol="$2"
-    local num_clients="$3"
-
-    echo "[$(date --iso-8601=seconds)] WARMUP ${protocol}_cl${num_clients} (5 views, result discarded)"
-    (
-        cd "${REPO}"
-        python3 run.py "--${flag}" \
-            --sgx-mode SIM \
-            --experiment-number 3 \
-            --batchsize 400 \
-            --payload "${payload_size}" \
-            --faults "${faults}" \
-            --totaltee "${requested_totaltee}" \
-            --views 5 \
-            --cl-num "${num_clients}" \
-            --cl-trans 200 \
-            --cl-sleep 0 \
-            --leader-mode fixed \
-            --leader-id 0 \
-            --redis \
-            --kv-set-ratio 100 \
-            --kv-get-ratio 0 \
-            --kv-del-ratio 0 \
-            --kv-keyspace 10000 \
-            --kv-value-len "${kv_value_length}"
-    )
-}
 
 run_one() {
     local flag="$1"
@@ -130,15 +91,18 @@ run_one() {
     local run_log_dir="${LOG_DIR}/${tag}"
     local run_result_dir="${RESULT_DIR}/raw/${tag}"
     local rc metrics
+    local -a topology_args
+
+    # Only the two Raftel variants use an all-TEE topology with rotating
+    # leadership. Other protocols retain their protocol-defined TEE population
+    # and fixed leader 0.
+    if [[ "${flag}" == "p0" || "${flag}" == "p1" ]]; then
+        topology_args=(--config-all-tee --leader-mode rotate)
+    else
+        topology_args=(--totaltee "${requested_totaltee}" --leader-mode fixed --leader-id 0)
+    fi
 
     mkdir -p "${run_log_dir}/remote" "${run_result_dir}"
-
-    # AE (§三): 5-view warm-up before the measured run
-    if ! warmup_one "${flag}" "${protocol}" "${num_clients}" \
-        >"${run_log_dir}/warmup.log" 2>&1; then
-        echo "ERROR: warm-up failed for ${tag}; measurement skipped" >&2
-        return 1
-    fi
 
     echo "[$(date --iso-8601=seconds)] START ${tag} (clients=${num_clients})"
 
@@ -152,13 +116,11 @@ run_one() {
             --batchsize 400 \
             --payload "${payload_size}" \
             --faults "${faults}" \
-            --totaltee "${requested_totaltee}" \
             --views "${views}" \
             --cl-num "${num_clients}" \
             --cl-trans 2000 \
             --cl-sleep 0 \
-            --leader-mode fixed \
-            --leader-id 0 \
+            "${topology_args[@]}" \
             --redis \
             --kv-set-ratio 100 \
             --kv-get-ratio 0 \

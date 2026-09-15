@@ -48,14 +48,14 @@ def _apply_style():
 PROTOCOL_STYLES = {
     "Raftel":        {"color": "#4E79A7", "marker": "o", "linestyle": "-",  "zorder": 4},
     "Raftel-Worst":  {"color": "#4E79A7", "marker": "o", "linestyle": "--", "zorder": 3, "alpha": 0.6},
-    "Chained":       {"color": "#F28E2B", "marker": "s", "linestyle": "-",  "zorder": 3},
+    "Chained_Raftel": {"color": "#F28E2B", "marker": "s", "linestyle": "-",  "zorder": 3},
     "Achilles":      {"color": "#59A14F", "marker": "^", "linestyle": "-",  "zorder": 3},
     "Hotstuff":      {"color": "#E15759", "marker": "D", "linestyle": "-",  "zorder": 3},
     "Basic-Damysus": {"color": "#76B7B2", "marker": "v", "linestyle": "-",  "zorder": 3},
 }
 
 FAULT_ORDER = [1, 2, 4, 8, 16, 32]
-PROTOCOL_ORDER = ["Achilles", "Chained", "Raftel", "Hotstuff", "Basic-Damysus", "Raftel-Worst"]
+PROTOCOL_ORDER = ["Achilles", "Chained_Raftel", "Raftel", "Hotstuff", "Basic-Damysus", "Raftel-Worst"]
 
 
 def parse_stats(stats_file: Path) -> dict:

@@ -1,24 +1,34 @@
-# Experiment 3: Redis WAN End-to-End Performance
+# Experiment 3: Redis LAN End-to-End Performance
 
-This experiment corresponds to Figure 6 in the paper. It adds a 50 ms `netem` delay to `eth0` on every remote host and compares the end-to-end performance of five protocols using a Redis-backed key-value workload.
+This modified Figure 6 experiment compares the end-to-end performance of five
+protocols using a Redis-backed key-value workload over the cloud hosts' native
+LAN. Before running, it removes any root `netem` rule left on `eth0` and does
+not inject artificial network delay.
 
 ## Configuration
 
-- Protocols: Raftel (`p0`), Chained (`p1`), Achilles (`p2`), Hotstuff (`p3`), and Basic-Damysus (`p4`)
+- Protocols: Raftel (`p0`), Chained_Raftel (`p1`), Achilles (`p2`), Hotstuff (`p3`), and Basic-Damysus (`p4`)
 - Fault threshold: `8`
-- Requested TEE population: `9`
+- TEE population: all 25 replicas for Raftel and Chained_Raftel; the remaining
+  protocols retain their defaults (all 17 for Achilles, zero for Hotstuff, and
+  all 17 for Basic-Damysus)
 - Workload: 100% SET operations, 1 KB values, and a keyspace of 10,000 keys
 - Batch size: `400`
-- Payload size: `256` bytes
-- Clients: four concurrent clients, each sending 2,000 requests without an inter-request delay
+- Payload size: `1100` bytes
+- Clients: a load sweep of 1, 2, 4, 8, 16, and 32 concurrent clients; each
+  client sends 2,000 requests without an inter-request delay
 - Views: `30`
-- Repetitions: three per protocol, for 15 runs in total
-- Leader: fixed replica 0
+- Repetitions: three per protocol and client-count point, for 90 runs in total
+- Leader: rotates across replicas for Raftel and Chained_Raftel; fixed replica 0
+  for Achilles, Hotstuff, and Basic-Damysus
 - Backend: Redis, enabled with `--redis`
 
-Only Raftel accepts a configurable `--totaltee` value. The effective TEE populations are nine for Raftel, nine for Chained, all 17 replicas for Achilles, zero for Hotstuff, and all 17 replicas for Basic-Damysus.
+Experiment 3 passes `--config-all-tee` only for Raftel and Chained_Raftel. The
+other protocols keep the protocol-specific TEE populations selected by
+`run.py`.
 
-The remote `netem` configuration is removed when the script exits or is interrupted.
+The script verifies that no `netem` delay remains on the remote hosts before
+starting the first run.
 
 Estimated running time: approximately 1.5 hours, assuming the configured nodes are available and no failed runs need to be repeated.
 

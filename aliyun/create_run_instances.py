@@ -24,8 +24,33 @@ key_pair_name = config["key_pair_name"]
 vpc_id = config["vpc_id"]
 vswitch_id = config["vswitch_id"]
 
+
+def read_existing_instance_ids():
+    """Return the unique instance IDs already tracked by this deployment."""
+    instances_file = ALIYUN_DIR / "instances.txt"
+    if not instances_file.exists():
+        return []
+    return list(dict.fromkeys(
+        line.strip() for line in instances_file.read_text().splitlines()
+        if line.strip()
+    ))
+
+
 # Create an ECS instance function
 def create_ecs_instances(count=None):
+    target_count = count if count is not None else instance_count
+    existing_instance_ids = read_existing_instance_ids()
+    create_count = max(0, target_count - len(existing_instance_ids))
+
+    print(
+        f"Target instance count: {target_count}; "
+        f"already tracked: {len(existing_instance_ids)}; "
+        f"creating: {create_count}"
+    )
+    if create_count == 0:
+        print("Target instance count already reached; no new instances created.")
+        return 0
+
     client = AcsClient(access_key_id, access_key_secret, region_id)
 
     request = CommonRequest()
@@ -49,7 +74,7 @@ def create_ecs_instances(count=None):
     request.add_query_param('KeyPairName', key_pair_name)  # Set the key pair
     request.add_query_param('UniqueSuffix', 'true')  # Set an orderly instance name
     # request.add_query_param('AutoReleaseTime', '2024-06-01T12:00:00Z')  # Automatic release time
-    request.add_query_param('Amount', count if count is not None else instance_count)
+    request.add_query_param('Amount', create_count)
 
     try:
         response = client.do_action_with_exception(request)
@@ -70,7 +95,7 @@ def create_ecs_instances(count=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create Raftel ECS instances")
     parser.add_argument("--count", type=int, default=None,
-                        help="override instance_count from config.json")
+                        help="target total instance count (default: instance_count from config.json)")
     args = parser.parse_args()
     if args.count is not None and args.count < 1:
         parser.error("--count must be at least 1")

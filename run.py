@@ -36,29 +36,22 @@ from scp import SCPClient
 # Protocol topology
 # ---------------------------------------------------------------------------
 
-# Each value is (replica-count factor, source branch). A factor of 3 means
-# 3f+1 replicas; a factor of 2 means 2f+1 replicas.
-_PROTOCOL_CHECKOUT = {
-    "Raftel": (3, "main"),
-    "Chained": (3, "main"),
-    "Achilles": (2, "main"),
-    "Hotstuff": (3, "main"),
-    "Basic-Damysus": (2, "main"),
+# A factor of 3 means 3f+1 replicas; a factor of 2 means 2f+1 replicas.
+# Protocols are always built from the branch that launched run.py.
+_PROTOCOL_FACTORS = {
+    "Raftel": 3,
+    "Chained_Raftel": 3,
+    "Achilles": 2,
+    "Hotstuff": 3,
+    "Basic-Damysus": 2,
 }
 
 
 def protocol_factor(protocol: str) -> int:
     """Return the coefficient in the protocol's ``factor * faults + 1`` size."""
-    if protocol not in _PROTOCOL_CHECKOUT:
+    if protocol not in _PROTOCOL_FACTORS:
         raise ValueError(f"Unknown protocol: {protocol!r}")
-    return _PROTOCOL_CHECKOUT[protocol][0]
-
-
-def protocol_git_branch(protocol: str) -> str:
-    """Return the source branch associated with ``protocol``."""
-    if protocol not in _PROTOCOL_CHECKOUT:
-        raise ValueError(f"Unknown protocol: {protocol!r}")
-    return _PROTOCOL_CHECKOUT[protocol][1]
+    return _PROTOCOL_FACTORS[protocol]
 
 
 def num_replicas(factor: int, faults: int) -> int:
@@ -79,7 +72,7 @@ def protocol_totaltee(protocol: str, faults: int, totalnodes: int, requested: in
     """
     if protocol == "Raftel":
         return requested
-    if protocol == "Chained":
+    if protocol == "Chained_Raftel":
         return faults + 1
     if protocol in ("Achilles", "Basic-Damysus"):
         return totalnodes
@@ -95,7 +88,7 @@ def protocol_totaltee(protocol: str, faults: int, totalnodes: int, requested: in
 # run.py CLI flags vs experiments.py (for comparable experiments)
 # experiments.py uses --p1..--p8; run.py uses different numbering. Rough mapping:
 #   run --p0 Raftel             -> BASIC_HYBRID_TEE
-#   run --p1 Chained-Hybrid    ~ (no direct single flag; see experiments CH*)
+#   run --p1 Chained_Raftel    ~ (no direct single flag; see experiments CH*)
 #   run --p2 Achilles          ~ experiments Achilles branch
 #   run --p3 Hotstuff          ~ experiments --p1 (BASE / BASIC_HOTSTUFF)
 #   run --p4 Basic-Damysus     ~ upstream BASIC_CHEAP_AND_QUICK / BASIC_DAMYSUS
@@ -159,7 +152,6 @@ kv_value_len = 16
 # payloadsize = 256
 # counterDelay = 0
 forcrmake = True
-no_stash = True
 # SSH defaults
 SSH_USERNAME = 'root'
 SSH_KEY_PATH = './TShard'
@@ -293,11 +285,21 @@ def remote_stats_dir() -> str:
 
 
 def ssh_clear_remote_stats_on_host(ip: str) -> None:
-    """Recreate the remote stats directory once before launching replicas."""
+    """Stop project Redis instances and clear remote stats before a run."""
     remote_stats = remote_stats_dir()
     bash = (
-        f"mkdir -p {shlex.quote(remote_stats)} && "
-        f"find {shlex.quote(remote_stats)} -mindepth 1 -maxdepth 1 -delete"
+        f"mkdir -p {shlex.quote(remote_stats)}; "
+        f"for workdir in {shlex.quote(remote_stats)}/redis/r*; do "
+        "  [ -d \"$workdir\" ] || continue; "
+        "  replica=${workdir##*/r}; "
+        "  case \"$replica\" in ''|*[!0-9]*) continue ;; esac; "
+        f"  port=$(({startRedisPort} + replica)); "
+        "  if command -v redis-cli >/dev/null 2>&1; then "
+        "    redis-cli -h 127.0.0.1 -p \"$port\" shutdown nosave >/dev/null 2>&1 || true; "
+        "  fi; "
+        "  fuser -k \"$port/tcp\" >/dev/null 2>&1 || true; "
+        "done; "
+        f"find {shlex.quote(remote_stats)} -mindepth 1 -delete"
     )
     ssh = SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
@@ -1676,19 +1678,6 @@ def makeInstance(protocol, debug, batchsize, payload, faults, totaltee, pct):
     pro_dir = str(exen / f"{protocol}_{faults}_{totaltee}_{payload}_{batchsize}_{pct}")
 
     factor = protocol_factor(protocol)
-    branch = protocol_git_branch(protocol)
-    # change to the correct branch
-    cmd_stash = 'git stash &&'
-    if no_stash:
-        cmd_stash = ' '
-    cmd = f"{cmd_stash} git checkout {branch}"
-
-    process = Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
-    stdout, stderr = process.communicate()
-    output = stdout.decode()
-    error = stderr.decode()
-    print(f"Stop checkout output:\n{output}")
-    print(f"Stop checkout error:\n{error}")
 
     # make params
     print(f"mkprotocol: {protocol}, factor:{factor}, batchsize: {batchsize}, payload: {payload}, teetotal: {totaltee}, pct: {pct}")
@@ -1764,7 +1753,7 @@ def mkParams(protocol,debug,constFactor,numFaults,totaltee,numTrans,payloadSize,
             f.write("#define BASIC_HYBRID_TEE_DEBUG\n")
         else:
             f.write("#define BASIC_HYBRID_TEE\n")
-    elif protocol == "Chained":
+    elif protocol == "Chained_Raftel":
         f.write("#define CHAINED_HYBRID_TEE\n")
     elif protocol == "Achilles":
         f.write("#define CHAINED_ACHILLES\n")
@@ -1774,7 +1763,7 @@ def mkParams(protocol,debug,constFactor,numFaults,totaltee,numTrans,payloadSize,
         f.write("#define BASIC_DAMYSUS\n")
     f.write("#define MAX_NUM_NODES " + str((constFactor*numFaults)+1) + "\n")
 
-    # if protocol == "Chained":
+    # if protocol == "Chained_Raftel":
     #     f.write("#define MAX_NUM_SIGNATURES " + str(numFaults+1) + "\n")
     # else:
     #     f.write("#define MAX_NUM_SIGNATURES " + str((constFactor*numFaults)+1-numFaults) + "\n")
@@ -3005,7 +2994,7 @@ def main():
     """Parse CLI options, prepare artifacts, and dispatch the selected run mode."""
     parser = argparse.ArgumentParser(description='Start one experiment with given parameters.')
     parser.add_argument("--p0",        action="store_true",    help="run Raftel")
-    parser.add_argument("--p1",        action="store_true",    help="run Chained")
+    parser.add_argument("--p1",        action="store_true",    help="run Chained_Raftel")
     parser.add_argument("--p2",        action="store_true",    help="run Achilles")
     parser.add_argument("--p3",        action="store_true",    help="run hotstuff")
     parser.add_argument("--p4",        action="store_true",    help="run basic Damysus")
@@ -3031,7 +3020,11 @@ def main():
     parser.add_argument('--cl-sleep',type=int,default=0,dest='cl_sleep',help='client sleep interval in microseconds between sends (default 0)',)
     parser.add_argument('--repeats',type=int,default=1,help='repeat the run and average stats (default 1)',)
     parser.add_argument('--config-by-totaltee',action='store_true',help='deprecated: now default behavior; local config already follows --totaltee',)
-    parser.add_argument('--config-all-tee',action='store_true',help='legacy mode: force local config to all isTEE:1',)
+    parser.add_argument(
+        '--config-all-tee',
+        action='store_true',
+        help='mark every Raftel or Chained_Raftel replica as TEE in local or remote configuration',
+    )
     parser.add_argument('--opdist',type=int,default=0,help='server argv opdist (default 0, same as experiments.py)',)
     parser.add_argument('--print-vals-mean',action='store_true',help='also print calculate_mean_of_values (first two cols) after each repeat',)
     parser.add_argument('--cutoff-sec',type=int,default=None,help='max local wait time in seconds before forced stop (default uses built-in cutOffBound=60)',)
@@ -3122,7 +3115,7 @@ def main():
     if args.p0:
         protocol = "Raftel"
     elif args.p1:
-        protocol = "Chained"
+        protocol = "Chained_Raftel"
     elif args.p2:
         protocol = "Achilles"
     elif args.p3:
@@ -3137,19 +3130,22 @@ def main():
 
     factor = protocol_factor(protocol)
     total_nodes = num_replicas(factor, args.faults)
-    # Resolve protocol-defined TEE populations before generating configs and
-    # binaries so node roles, runtime thresholds, and compile-time capacities
-    # all use the same value.  Only Raftel honors --totaltee.
-    args.totaltee = protocol_totaltee(
-        protocol, args.faults, total_nodes, args.totaltee
-    )
-    if args.config_all_tee and protocol != "Raftel":
-        parser.error("--config-all-tee is only valid for Raftel")
+    # Resolve the TEE population before generating configs and binaries so node
+    # roles, runtime thresholds, and compile-time capacities all use the same
+    # value.  Raftel variants may explicitly override their normal population.
+    if args.config_all_tee and protocol not in ("Raftel", "Chained_Raftel"):
+        parser.error("--config-all-tee is only valid for Raftel and Chained_Raftel")
+    if args.config_all_tee:
+        args.totaltee = total_nodes
+    else:
+        args.totaltee = protocol_totaltee(
+            protocol, args.faults, total_nodes, args.totaltee
+        )
     if args.totaltee < 0 or args.totaltee > total_nodes:
         parser.error(f"--totaltee must be between 0 and the replica count ({total_nodes})")
     if args.leader_id < 0 or args.leader_id >= total_nodes:
         parser.error(f"--leader-id must be between 0 and {total_nodes - 1}")
-    build_totaltee = total_nodes if args.local and args.config_all_tee else args.totaltee
+    build_totaltee = args.totaltee
     # Local mode always regenerates `config` via genLocalConf(...), so skip mkConfig here.
     # This avoids an intermediate config written with mkConfig's instance-rounding policy.
     if not args.local:

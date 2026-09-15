@@ -35,9 +35,9 @@ See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appe
 - hiredis + Redis (for experiment 3): `sudo apt-get install -y libhiredis-dev redis-server`
 - SSH private key `TShard` at `/root/Raftel/TShard` (reviewers: distributed via HotCRP)
 
-The cloud workflow provisions 7 hosts and reuses them for all experiments. `run.py`
+The cloud workflow provisions 10 hosts and reuses them for all experiments. `run.py`
 can start up to 15 replicas per host on distinct ports, giving a total capacity of
-105 replicas. This covers the largest configured case (`faults=32`, `3f+1=97`).
+150 replicas. This covers the largest configured case (`faults=32`, `3f+1=97`).
 Because replicas share hosts, these measurements include same-host CPU, memory,
 network, and SGX contention and are not equivalent to a one-replica-per-host setup.
 
@@ -45,57 +45,82 @@ network, and SGX contention and are not equivalent to a one-replica-per-host set
 
 ## Path A — Pre-provisioned coordinator
 
-The authors provide a configured coordinator ECS, but the 7-node experiment
+The authors provide a configured coordinator ECS, but the 10-node experiment
 cluster is not started in advance. The coordinator already contains the
 Alibaba Cloud configuration and the SSH private key distributed through
 HotCRP. From the coordinator, create the replica nodes and install their
 experiment environment before starting a run:
 
 ```bash
-# 1. Create 7 reusable SGX ECS nodes and wait until SSH is reachable
-./ae cloud up --count 7
+# 0. Run a local smoke test before provisioning cloud instances
+./ae smoke
 
-# 2. Synchronize the generated private IP list used by experiment scripts
+# 1. Create 10 reusable SGX ECS nodes and wait until SSH is reachable
+./ae cloud up --count 10
+
+# Synchronize the generated private IP list used by experiment scripts
 cp aliyun/priv_ip.txt ip_list
 
-# 3. Transfer the setup bundle and start environment installation on every node
+# 2. Transfer the setup bundle and start environment installation on every node
 ./ae cloud init
 
-# 4. Installation runs in background tmux sessions; monitor until all finish
+# Installation runs in background tmux sessions; monitor until all finish
 tmux list-sessions
-# To inspect one node: tmux attach -t setup1
+# To inspect one node:
+tmux attach -t setup1
 # Detach without stopping it: Ctrl-b, then d
 
-# 5. Verify SGX, SDK, Redis, hiredis, Salticidae, SSH, and coordinator setup
+# 3. Verify SGX, SDK, Redis, hiredis, Salticidae, SSH, and coordinator setup
 ./ae cloud check
 ./ae doctor --profile paper
 
-# 6. Run all three experiments (~6–8 h)
-./ae run all
+# 4. Run one small could experiment before starting the full experiments
+python3 run.py --p0 --faults 1 --totaltee 2
 
-# Alternatively, run an individual experiment and then generate its report
-./ae run fig3   # Experiment 1 / Figure 3(~ 3 h)
-./ae run fig4   # Experiment 2 / Figure 4(~ 2 h)
-./ae run fig6   # Experiment 3 / Figure 6(~ 2 h)
-./ae report
-
-# 7. Generate figures and the HTML report for the latest run
-./ae report
+# 5. Run experiments and then generate their reports
+./ae run fig3   # Experiment 1 / Figure 3 (~3 h)
+./ae run fig4   # Experiment 2 / Figure 4 (~2 h)
+./ae run fig6   # Experiment 3 / Figure 6 (~2 h)
 ```
-
-`./ae run all` does not create ECS instances or install the remote environment;
-it only compiles, deploys, starts, and measures servers on the nodes already
-listed in `ip_list`. Do not start the experiment until both checks above pass
-for all 7 nodes.
-
-Open `runs/<RUN_ID>/index.html` to see the reproduced figures, comparisons against reference values, experiment parameters, paper claim descriptions, and a checksums audit trail. Apply the documented PASS/WARN/FAIL thresholds when interpreting those comparisons.
-
-For a faster trend check (~30 min, reduced scale):
+# 6. Generate and view the figures manually
 
 ```bash
-./ae run all --scale mini
-./ae report
+python3 scripts/plot_fig3.py
+python3 scripts/plot_fig4.py
+python3 scripts/plot_fig6.py
 ```
+
+The generated PNG files are available at:
+
+```text
+experiments_reproduction/experiment1/results/fig3.png
+experiments_reproduction/experiment2/results/fig4.png
+experiments_reproduction/experiment3/results/fig6.png
+```
+# 7. Release instances when done
+```bash
+./ae cloud down
+```
+
+The raw summary data can be inspected directly after each experiment:
+
+- Figure 3: `experiments_reproduction/experiment1/stats.txt`
+- Figure 4: `experiments_reproduction/experiment2/stats.txt`
+- Figure 6: `experiments_reproduction/experiment3/stats.txt`
+
+ The raw data has the form
+`configuration_f<number-of-faults>, throughput_kTPS, latency_ms`. For example:
+
+```text
+Chained_Raftel_f16, 0.8582167777777777, 830.3356493055554
+```
+
+This means that the **Chained_Raftel** protocol was measured with 16 tolerated faults,
+giving a throughput of `0.8582167777777777` kTPS and a latency of
+`830.3356493055554` ms. Figure 6 uses a CSV header because it additionally
+records the client load, number of successful repeats, end-to-end latency
+percentiles, and number of completed requests.
+
 
 ---
 
@@ -111,8 +136,8 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
                               # vswitch_id, key_pair_name; instance_type is fixed
                               # at ecs.g7t.2xlarge — do not change it
 
-# 2. Provision the 7 reusable hosts
-./ae cloud up --count 7
+# 2. Provision the 10 reusable hosts
+./ae cloud up --count 10
 
 # 3. Deploy code and initialize the experiment environment (~20 min)
 ./ae cloud init
@@ -128,7 +153,6 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
 ./ae run fig3   # Experiment 1 / Figure 3(~ 3 h)
 ./ae run fig4   # Experiment 2 / Figure 4(~ 2 h)
 ./ae run fig6   # Experiment 3 / Figure 6(~ 2 h)
-./ae report
 
 # 6. Release instances when done
 ./ae cloud down
@@ -144,9 +168,9 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
 
 | Figure | Claim | Mode |
 |---|---|---|
-| Fig 3 (WAN scalability) | Achilles ≥ Chained ≥ Raftel > Hotstuff ≈ Raftel-Worst; Raftel latency ≤ Chained < Basic-Damysus | Full reproduction: ±40% absolute PASS band, ordering must match |
+| Fig 3 (WAN scalability) | Achilles ≥ Chained_Raftel ≥ Raftel > Hotstuff ≈ Raftel-Worst; Raftel latency ≤ Chained_Raftel < Basic-Damysus | Full reproduction: ±40% absolute PASS band, ordering must match |
 | Fig 4 (LAN TEE configs) | S1 > S2 ≥ S3 > S4 throughput; S1 ≤ S2 ≤ S3 ≤ S4 latency; S1 at f=32 = 31.5 kTPS | Full reproduction: same criteria |
-| Fig 6 (Redis E2E WAN) | Achilles 95 TPS, Chained 92 TPS, Raftel 84 TPS, Hotstuff 44 TPS (peak) | Full reproduction: same criteria |
+| Fig 6 (Redis E2E LAN, modified) | Local experiment output; the paper's WAN reference values are not directly comparable | Compare protocols within the same LAN run |
 
 Expected errors: SGX attestation overhead and cloud network jitter typically produce ±10–20% variation from the paper numbers. The ±40% PASS band accounts for inter-run variance across different AE windows.
 
@@ -160,7 +184,7 @@ Reference values are in `runs/reference/fig{3,4,6}.csv`; PASS/WARN/FAIL criteria
 |---|---|---|---|
 | Figure 3 | WAN scalability | `experiments_reproduction/experiment1/script/run_wan.sh` | `experiment1/stats.txt` |
 | Figure 4 | LAN TEE configs | `experiments_reproduction/experiment2/script/run_lan.sh` | `experiment2/stats.txt` |
-| Figure 6 | Redis E2E WAN | `experiments_reproduction/experiment3/script/run_redis_wan.sh` | `experiment3/stats.txt` |
+| Figure 6 | Redis E2E LAN (modified) | `experiments_reproduction/experiment3/script/run_redis_wan.sh` | `experiment3/stats.txt` |
 
 The Figure 3/4 scripts accept `AE_FAULT_VALUES`; the Figure 6 script accepts `AE_LOAD_CLIENTS` and `AE_REPEATS`. The AE CLI sets these variables for `--scale mini`. All experiment scripts pass `--sgx-mode SIM` to `run.py`.
 
@@ -176,6 +200,12 @@ The Figure 3/4 scripts accept `AE_FAULT_VALUES`; the Figure 6 script accepts `AE
 ./ae status [RUN_ID]                   # show run completion status
 ./ae cloud <up|init|check|down> [--count N]
 ```
+
+For `cloud up`, `--count N` is the target total number of instances. IDs already
+listed in `aliyun/instances.txt` count toward that target, so if 7 instances are
+tracked, `./ae cloud up --count 10` creates only 3 additional instances. If the
+target has already been reached, no new instances are created. Remove stale IDs
+from `instances.txt` if the corresponding ECS instances no longer exist.
 
 Each `./ae run` creates `runs/<RUN_ID>/` with:
 - `manifest.json` — git commit, timestamp, cluster IPs, scale
@@ -230,8 +260,8 @@ git submodule update --init
 ## Troubleshooting
 
 **The requested replicas exceed the configured host capacity**
-Seven hosts support at most 105 replicas (`15` per host). Check that
-`aliyun/priv_ip.txt` contains all 7 hosts and keep the configured fault range at
+Ten hosts support at most 150 replicas (`15` per host). Check that
+`aliyun/priv_ip.txt` contains all 10 hosts and keep the configured fault range at
 or below `faults=32` for `3f+1` protocols.
 
 **`make SGX_MODE=SIM failed`**
