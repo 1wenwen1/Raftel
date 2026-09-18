@@ -77,8 +77,8 @@ tmux attach -t setup1
 python3 run.py --p0 --faults 1 --totaltee 2
 
 # 5. Run experiments and then generate their reports
-./ae run fig3   # Experiment 1 / Figure 3 (~3 h)
-./ae run fig4   # Experiment 2 / Figure 4 (~2 h)
+./ae run fig3   # Experiment 1 / Figure 3 (~2 h)
+./ae run fig4   # Experiment 2 / Figure 4 (~1.5 h)
 
 # 6. Generate and view the figures manually
 
