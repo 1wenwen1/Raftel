@@ -155,8 +155,8 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
 
 | Figure | Claim | Mode |
 |---|---|---|
-| Fig 3 (WAN scalability) | Achilles ≥ Chained_Raftel ≥ Raftel > Hotstuff ≈ Raftel-Worst; Raftel latency ≤ Chained_Raftel < Basic-Damysus | Full reproduction: ±40% absolute PASS band, ordering must match |
-| Fig 4 (LAN TEE configs) | S1 > S2 ≥ S3 > S4 throughput; S1 ≤ S2 ≤ S3 ≤ S4 latency; S1 at f=32 = 31.5 kTPS | Full reproduction: same criteria |
+| Fig 3 (WAN scalability) | Achilles ≥ Chained_Raftel ≥ Raftel > Damysus> Hotstuff ≈ Raftel-Worst, with the latency trend generally reversed. | Full reproduction: ±40% absolute PASS band, ordering must match |
+| Fig 4 (LAN TEE configs) | S1 > S2 ≥ S3 > S4 throughput, with the latency trend generally reversed. | Full reproduction: same criteria |
 
 Expected errors: SGX attestation overhead and cloud network jitter typically produce ±10–20% variation from the paper numbers. The ±40% PASS band accounts for inter-run variance across different AE windows.
 
