@@ -7,6 +7,17 @@ Raftel is an SGX-TEE-assisted BFT consensus protocol for partially trusted envir
 See [doc/ARTIFACT_APPENDIX.md](doc/ARTIFACT_APPENDIX.md) for the EuroSys AE appendix and [doc/CODE_OVERVIEW.md](doc/CODE_OVERVIEW.md) for the code structure and a description of changes relative to Damysus.
 
 ---
+## Description
+
+Raftel is an SGX-based, TEE-assisted Byzantine Fault Tolerance (BFT) protocol designed for partially trusted systems in which only a subset of replicas is equipped with a TEE. This implementation is built on top of the [Damysus](https://github.com/vrahli/damysus) codebase.
+
+The implementation is organized as follows:
+
+- `App/Handler.cpp` implements the host-side consensus logic, including message handling, protocol phases, quorum processing, and communication with the enclave.
+- `Enclave/EnclaveComb.cpp` implements the trusted operations for the basic Raftel protocol, including protocol-state transitions, proposal validation, signing, quorum-certificate validation, and vote accumulation.
+- `Enclave/EnclaveChComb.cpp` implements the trusted operations for Chained-Raftel.
+- `App/params.h` selects the protocol at compile time. Raftel and Chained-Raftel are enabled by the `BASIC_HYBRID_TEE` and `CHAINED_HYBRID_TEE` macros, respectively.
+- `run.py` generates the protocol parameters and node configuration, compiles the selected implementation, and orchestrates local or distributed experiments.
 
 ## Contents
 
@@ -54,13 +65,13 @@ experiment environment before starting a run:
 # 0. Run a local smoke test before provisioning cloud instances
 ./ae smoke
 
-# 1. Create 10 reusable SGX ECS nodes and wait until SSH is reachable
+# 1. Create 10 reusable SGX ECS nodes and wait until SSH is reachable(~5 min)
 ./ae cloud up --count 10
 
 # Synchronize the generated private IP list used by experiment scripts
 cp aliyun/priv_ip.txt ip_list
 
-# 2. Transfer the setup bundle and start environment installation on every node
+# 2. Transfer the setup bundle and start environment installation on every node (~20 min)
 ./ae cloud init
 
 # Installation runs in background tmux sessions; monitor until all finish
@@ -138,8 +149,8 @@ $EDITOR aliyun/config.json   # set access_key_id, access_key_secret, region_id,
 ./ae cloud check
 
 # 5. Run all experiment and then generate its report
-./ae run fig3   # Experiment 1 / Figure 3(~ 3 h)
-./ae run fig4   # Experiment 2 / Figure 4(~ 2 h)
+./ae run fig3   # Experiment 1 / Figure 3(~ 2 h)
+./ae run fig4   # Experiment 2 / Figure 4(~ 1.5 h)
 
 # 6. Release instances when done
 ./ae cloud down
